@@ -170,6 +170,7 @@ def render_single_prediction() -> None:
                     exchange=exchange or None,
                     period=period,
                     threshold=threshold,
+                    compute_walk_forward_metrics=True,
                 )
             render_prediction_card(prediction)
         else:
@@ -920,23 +921,90 @@ def render_prediction_card(prediction: Prediction) -> None:
                 "예측은 참고용으로만 보는 편이 좋습니다."
             )
 
-        detail_frame = pd.DataFrame(
-            [
-                {
-                    "최근 거래일": prediction.latest_date,
-                    "최근 종가": round(prediction.latest_close, 6),
-                    "모델 검증 정확도": round(metrics.accuracy, 4),
-                    "균형 정확도": round(metrics.balanced_accuracy, 4),
-                    "단순 기준 정확도": round(metrics.baseline_accuracy, 4),
-                    "기준 대비 개선폭": round(metrics.edge_vs_baseline, 4),
-                    "상승 precision": round(metrics.precision_up, 4),
-                    "상승 recall": round(metrics.recall_up, 4),
-                    "학습 데이터 수": metrics.train_rows,
-                    "검증 데이터 수": metrics.test_rows,
-                }
-            ]
-        )
+        detail_row = {
+            "최근 거래일": prediction.latest_date,
+            "최근 종가": round(prediction.latest_close, 6),
+            "모델 검증 정확도": round(metrics.accuracy, 4),
+            "균형 정확도": round(metrics.balanced_accuracy, 4),
+            "단순 기준 정확도": round(metrics.baseline_accuracy, 4),
+            "기준 대비 개선폭": round(metrics.edge_vs_baseline, 4),
+            "상승 precision": round(metrics.precision_up, 4),
+            "상승 recall": round(metrics.recall_up, 4),
+            "학습 데이터 수": metrics.train_rows,
+            "검증 데이터 수": metrics.test_rows,
+        }
+        if metrics.walk_forward_accuracy is not None:
+            detail_row["Walk-forward 정확도"] = round(metrics.walk_forward_accuracy, 4)
+            detail_row["Walk-forward 균형 정확도"] = round(metrics.walk_forward_balanced_accuracy or 0.0, 4)
+            detail_row["Walk-forward 단순 기준"] = round(metrics.walk_forward_baseline_accuracy or 0.0, 4)
+            detail_row["Walk-forward 개선폭"] = round(metrics.walk_forward_edge_vs_baseline or 0.0, 4)
+            detail_row["Walk-forward 검증 수"] = metrics.walk_forward_test_rows
+
+        detail_frame = pd.DataFrame([detail_row])
         st.dataframe(detail_frame, use_container_width=True, hide_index=True)
+
+        explanation_rows = [
+            {
+                "지표": "모델 검증 정확도",
+                "의미": "마지막 검증 구간에서 전체 방향을 맞춘 비율입니다.",
+            },
+            {
+                "지표": "균형 정확도",
+                "의미": "상승과 하락을 한쪽에 치우치지 않고 얼마나 균형 있게 맞췄는지 보여줍니다.",
+            },
+            {
+                "지표": "단순 기준 정확도",
+                "의미": "모델 없이 검증 구간에서 더 많았던 방향만 계속 찍었을 때의 정확도입니다.",
+            },
+            {
+                "지표": "기준 대비 개선폭",
+                "의미": "모델 검증 정확도에서 단순 기준 정확도를 뺀 값입니다. 양수면 모델이 단순 기준보다 낫습니다.",
+            },
+            {
+                "지표": "상승 precision",
+                "의미": "모델이 상승이라고 말한 날들 중 실제로 상승한 비율입니다.",
+            },
+            {
+                "지표": "상승 recall",
+                "의미": "실제로 상승했던 날들 중 모델이 상승으로 잡아낸 비율입니다.",
+            },
+            {
+                "지표": "학습 데이터 수",
+                "의미": "모델을 학습하는 데 실제로 사용한 과거 데이터 개수입니다.",
+            },
+            {
+                "지표": "검증 데이터 수",
+                "의미": "성능 확인용으로 뒤쪽에 따로 남겨둔 데이터 개수입니다.",
+            },
+        ]
+        if metrics.walk_forward_accuracy is not None:
+            explanation_rows.extend(
+                [
+                    {
+                        "지표": "Walk-forward 정확도",
+                        "의미": "과거에서 하루씩 앞으로 전진하며 매번 그 시점 이전 데이터만으로 예측했을 때의 정확도입니다.",
+                    },
+                    {
+                        "지표": "Walk-forward 균형 정확도",
+                        "의미": "Walk-forward 방식에서 상승과 하락을 균형 있게 맞췄는지 보여줍니다.",
+                    },
+                    {
+                        "지표": "Walk-forward 단순 기준",
+                        "의미": "Walk-forward 검증 구간에서 단순히 한쪽 방향만 찍었을 때의 기준 정확도입니다.",
+                    },
+                    {
+                        "지표": "Walk-forward 개선폭",
+                        "의미": "Walk-forward 정확도가 단순 기준보다 얼마나 나은지 보여줍니다.",
+                    },
+                    {
+                        "지표": "Walk-forward 검증 수",
+                        "의미": "하루씩 전진하며 실제로 평가한 예측 횟수입니다.",
+                    },
+                ]
+            )
+
+        st.caption("자세한 수치 의미")
+        st.dataframe(pd.DataFrame(explanation_rows), use_container_width=True, hide_index=True)
 
 
 def render_valuation_card(result: ValuationResult) -> None:

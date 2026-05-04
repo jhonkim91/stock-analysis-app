@@ -34,6 +34,7 @@ def predict_next_day(
     csv_path: str | Path | None = None,
     test_size: float = 0.2,
     threshold: float = 0.5,
+    compute_walk_forward_metrics: bool = False,
 ) -> Prediction:
     symbol = normalize_ticker(ticker, exchange)
     history = load_history(symbol, period=period, interval=interval, csv_path=csv_path)
@@ -55,6 +56,7 @@ def predict_next_day(
         FEATURE_COLUMNS,
         test_size=test_size,
         threshold=threshold,
+        compute_walk_forward_metrics=compute_walk_forward_metrics,
     )
     probability_up = float(result.model.predict_proba(latest_row.to_numpy(dtype=float))[0])
     signal = "UP" if probability_up >= threshold else "DOWN"
