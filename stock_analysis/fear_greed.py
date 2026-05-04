@@ -7,39 +7,8 @@ import pandas as pd
 import requests
 
 
-BASE_SITE_URL = "https://kospi-fear-greed-index.co.kr/"
-VALUE_URL = (
-    "https://raw.githubusercontent.com/immanuelk1m/"
-    "kospi-feargreedindex/refs/heads/main/assets/js/json/value.json"
-)
-INDEX_URL = (
-    "https://raw.githubusercontent.com/immanuelk1m/"
-    "kospi-feargreedindex/main/assets/js/json/index.json"
-)
-FACTOR_STATUS_URL = (
-    "https://raw.githubusercontent.com/immanuelk1m/"
-    "kospi-feargreedindex/refs/heads/main/assets/js/json/factor_status.json"
-)
-
-
-STATUS_MAP = {
-    "1": "극도의 공포",
-    "2": "공포",
-    "3": "중립",
-    "4": "탐욕",
-    "5": "극도의 탐욕",
-}
-
-
-FACTOR_LABELS = {
-    "ema_spread_scaled": "EMA Spread",
-    "mcclenllan_scaled": "McClellan",
-    "p_c_ema_scaled": "Put/Call EMA",
-    "vix_ema_spread_scaled": "VIX EMA Spread",
-    "safe_spread_scaled": "Safe Spread",
-    "junk_spread_scaled": "Junk Spread",
-    "stock_strength_scaled": "Stock Strength",
-}
+BASE_SITE_URL = "https://feargreed.co.kr/"
+API_URL = "https://feargree-api.vercel.app/api"
 
 
 @dataclass
@@ -53,42 +22,52 @@ class FearGreedData:
 
 
 def fetch_fear_greed_data(*, timeout: int = 20) -> FearGreedData:
-    value_payload = _get_json(VALUE_URL, timeout=timeout)
-    timeline_payload = _get_json(INDEX_URL, timeout=timeout)
-    factor_payload = _get_json(FACTOR_STATUS_URL, timeout=timeout)
+    payload = _get_json(API_URL, timeout=timeout)
+    if not payload.get("success"):
+        raise ValueError("Fear & Greed API did not return success.")
 
-    summary = pd.DataFrame(
-        [
-            _summary_row("현재", value_payload.get("current"), value_payload.get("current_s")),
-            _summary_row("1주 전", value_payload.get("week"), value_payload.get("week_s")),
-            _summary_row("1개월 전", value_payload.get("month"), value_payload.get("month_s")),
-            _summary_row("1년 전", value_payload.get("year"), value_payload.get("year_s")),
-        ]
-    )
+    kr_payload = dict(payload.get("kr") or {})
+    history = pd.DataFrame(payload.get("history", []))
+    if history.empty:
+        raise ValueError("Fear & Greed history is empty.")
 
-    timeline = pd.DataFrame(timeline_payload.get("data", []))
-    if timeline.empty:
-        raise ValueError("Fear & Greed timeline data is empty.")
-    timeline = timeline.rename(columns={"x": "date", "y": "kospi_close", "z": "fear_greed"})
-    timeline["date"] = pd.to_datetime(timeline["date"])
-    timeline = timeline.sort_values("date").reset_index(drop=True)
+    history["date"] = pd.to_datetime(history["date"])
+    history = history.sort_values("date").reset_index(drop=True)
+    history["fear_greed"] = pd.to_numeric(history["kr"], errors="coerce")
+    history["us_fear_greed"] = pd.to_numeric(history.get("us"), errors="coerce")
+    history["kospi_close"] = pd.NA
 
-    latest_timestamp = timeline["date"].iloc[-1]
+    latest_timestamp = pd.to_datetime(payload.get("timestamp"))
     latest_date = latest_timestamp.date().isoformat()
     source_age_days = (date.today() - latest_timestamp.date()).days
+
+    current_score = float(kr_payload.get("score") or history["fear_greed"].dropna().iloc[-1])
+    summary = pd.DataFrame(
+        [
+            _summary_row("현재", current_score),
+            _history_summary_row("1주 전", history, current_score, days=7),
+            _history_summary_row("1개월 전", history, current_score, days=30),
+            _history_summary_row("1년 전", history, current_score, days=365),
+        ]
+    )
 
     factors = pd.DataFrame(
         [
             {
-                "factor_key": key,
-                "factor": FACTOR_LABELS.get(key, key),
-                "score_0_1": float(value),
-                "score_0_100": round(float(value) * 100, 2),
+                "factor_key": indicator.get("name", ""),
+                "factor": indicator.get("name", ""),
+                "score_0_1": round(float(indicator.get("value", 0)) / 100, 4),
+                "score_0_100": round(float(indicator.get("value", 0)), 2),
+                "raw": indicator.get("raw"),
+                "unit": indicator.get("unit", ""),
             }
-            for key, value in factor_payload.items()
+            for indicator in (kr_payload.get("indicators") or [])
         ]
     )
-    factors = factors.sort_values("score_0_100", ascending=False).reset_index(drop=True)
+    if not factors.empty:
+        factors = factors.sort_values("score_0_100", ascending=False).reset_index(drop=True)
+
+    timeline = history.loc[:, ["date", "fear_greed", "us_fear_greed", "kospi_close"]].copy()
 
     return FearGreedData(
         summary=summary,
@@ -96,20 +75,45 @@ def fetch_fear_greed_data(*, timeout: int = 20) -> FearGreedData:
         factors=factors,
         latest_date=latest_date,
         source_age_days=source_age_days,
+        source_url=BASE_SITE_URL,
     )
 
 
 def _get_json(url: str, *, timeout: int) -> dict:
-    response = requests.get(url, timeout=timeout)
+    response = requests.get(url, timeout=timeout, headers={"User-Agent": "Mozilla/5.0"})
     response.raise_for_status()
     return response.json()
 
 
-def _summary_row(label: str, value: float | None, status_code: str | None) -> dict:
-    numeric = float(value) if value is not None else None
+def _history_summary_row(label: str, history: pd.DataFrame, current_score: float, *, days: int) -> dict:
+    cutoff = history["date"].max() - pd.Timedelta(days=days)
+    candidates = history.loc[history["date"] <= cutoff, "fear_greed"].dropna()
+    score = float(candidates.iloc[-1]) if not candidates.empty else None
+    return _summary_row(label, score, current_score=current_score)
+
+
+def _summary_row(label: str, score: float | None, *, current_score: float | None = None) -> dict:
+    numeric = None if score is None else float(score)
+    change = None
+    if numeric is not None and current_score is not None:
+        change = round(current_score - numeric, 2)
     return {
         "period": label,
-        "score": round(numeric, 2) if numeric is not None else None,
-        "status_code": status_code or "",
-        "status": STATUS_MAP.get(status_code or "", "알 수 없음"),
+        "score": None if numeric is None else round(numeric, 2),
+        "status": score_to_status(numeric),
+        "change": change,
     }
+
+
+def score_to_status(score: float | None) -> str:
+    if score is None:
+        return "데이터 없음"
+    if score <= 20:
+        return "극단적 공포"
+    if score <= 40:
+        return "공포"
+    if score <= 60:
+        return "중립"
+    if score <= 80:
+        return "탐욕"
+    return "극단적 탐욕"

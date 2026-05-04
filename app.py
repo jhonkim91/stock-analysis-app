@@ -577,62 +577,14 @@ def render_fear_greed_tab() -> None:
         recent_fg = recent.loc[:, ["date", "fear_greed"]].set_index("date")
         st.line_chart(recent_fg, use_container_width=True)
 
-        st.subheader("최근 코스피 지수")
-        recent_kospi = recent.loc[:, ["date", "kospi_close"]].set_index("date")
-        st.line_chart(recent_kospi, use_container_width=True)
-
-        st.subheader("해석 기준")
-        guide = pd.DataFrame(
-            [
-                {"range": "0-20", "meaning": "극도의 공포"},
-                {"range": "20-40", "meaning": "공포"},
-                {"range": "40-60", "meaning": "중립"},
-                {"range": "60-80", "meaning": "탐욕"},
-                {"range": "80-100", "meaning": "극도의 탐욕"},
-            ]
-        )
-        st.dataframe(guide, use_container_width=True, hide_index=True)
-
-
-def render_fear_greed_tab() -> None:
-    left, right = st.columns([0.36, 0.64], gap="large")
-    with left:
-        refresh = st.button("지표 새로고침", type="primary", use_container_width=True)
-        if refresh:
-            load_fear_greed_data.clear()
-
-        with st.spinner("공포탐욕 지표 로딩 중"):
-            data = load_fear_greed_data()
-
-        current = data.summary.iloc[0]
-        c1, c2 = st.columns(2)
-        c1.metric("현재 지수", f"{current['score']:.1f}")
-        c2.metric("상태", str(current["status"]))
-        st.caption(f"원본 사이트: {data.source_url}")
-        st.caption(f"원본 데이터 기준일: {data.latest_date}")
-
-        if data.source_age_days > 7:
-            today_label = pd.Timestamp.today().date().isoformat()
-            st.warning(
-                f"원본 데이터 최신일이 {data.latest_date}입니다. "
-                f"오늘({today_label}) 기준 {data.source_age_days}일 이전 데이터입니다."
-            )
-
-        st.subheader("비교 구간")
-        st.dataframe(data.summary, use_container_width=True, hide_index=True)
-
-        st.subheader("세부 팩터")
-        st.dataframe(data.factors, use_container_width=True, hide_index=True)
-
-    with right:
-        st.subheader("최근 공포탐욕 타임라인")
-        recent = data.timeline.tail(120).copy()
-        recent_fg = recent.loc[:, ["date", "fear_greed"]].set_index("date")
-        st.line_chart(recent_fg, use_container_width=True)
-
-        st.subheader("최근 코스피 지수")
-        recent_kospi = recent.loc[:, ["date", "kospi_close"]].set_index("date")
-        st.line_chart(recent_kospi, use_container_width=True)
+        if "us_fear_greed" in recent.columns and recent["us_fear_greed"].notna().any():
+            st.subheader("한국/미국 심리 비교")
+            compare_frame = recent.loc[:, ["date", "fear_greed", "us_fear_greed"]].set_index("date")
+            st.line_chart(compare_frame, use_container_width=True)
+        elif "kospi_close" in recent.columns and recent["kospi_close"].notna().any():
+            st.subheader("최근 코스피 지수")
+            recent_kospi = recent.loc[:, ["date", "kospi_close"]].set_index("date")
+            st.line_chart(recent_kospi, use_container_width=True)
 
         st.subheader("해석 기준")
         guide = pd.DataFrame(
