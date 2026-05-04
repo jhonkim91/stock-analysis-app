@@ -306,21 +306,53 @@ def build_fear_greed_dashboard_card(data) -> str:
 
 def build_fear_greed_gauge(*, score: float, status: str, accent_color: str) -> str:
     progress = max(0.0, min(100.0, float(score)))
+    segments = [
+        (0.0, 25.0, "#ef4444"),
+        (25.0, 45.0, "#f97316"),
+        (45.0, 55.0, "#facc15"),
+        (55.0, 75.0, "#22c55e"),
+        (75.0, 100.0, "#06b6d4"),
+    ]
+    base_segments: list[str] = []
+    active_segments: list[str] = []
+    for start, end, color in segments:
+        base_segments.append(build_fear_greed_gauge_segment(start=start, end=end, color=color, opacity=0.18))
+        active_end = min(progress, end)
+        if active_end > start:
+            active_segments.append(build_fear_greed_gauge_segment(start=start, end=active_end, color=color, opacity=1.0))
+
     return (
         "<div style='display:flex; justify-content:center; padding:4px 0 6px 0;'>"
         "<svg width='100%' viewBox='0 0 280 170' style='max-width:420px;'>"
-        "<path d='M 40 140 A 100 100 0 0 1 240 140' fill='none' stroke='#dbe4f0' stroke-width='16' stroke-linecap='round' pathLength='100'/>"
-        f"<path d='M 40 140 A 100 100 0 0 1 240 140' fill='none' stroke='{accent_color}' stroke-width='16' stroke-linecap='round' pathLength='100' stroke-dasharray='{progress} 100'/>"
-        "<circle cx='140' cy='108' r='34' fill='#ffffff' opacity='0.98'/>"
-        "<text x='32' y='148' font-size='12' fill='#64748b'>0</text>"
-        "<text x='84' y='62' font-size='12' fill='#64748b'>25</text>"
-        "<text x='136' y='42' font-size='12' fill='#64748b'>50</text>"
-        "<text x='188' y='62' font-size='12' fill='#64748b'>75</text>"
-        "<text x='232' y='148' font-size='12' fill='#64748b'>100</text>"
+        "<path d='M 40 140 A 100 100 0 0 1 240 140' fill='none' stroke='#e2e8f0' stroke-width='18' stroke-linecap='round' pathLength='100'/>"
+        f"{''.join(base_segments)}"
+        f"{''.join(active_segments)}"
+        "<circle cx='140' cy='108' r='38' fill='#ffffff' opacity='0.99'/>"
+        "<text x='26' y='150' font-size='11' font-weight='700' fill='#64748b'>0</text>"
+        "<text x='70' y='76' font-size='11' font-weight='700' fill='#64748b'>25</text>"
+        "<text x='102' y='49' font-size='11' font-weight='700' fill='#64748b'>45</text>"
+        "<text x='164' y='49' font-size='11' font-weight='700' fill='#64748b'>55</text>"
+        "<text x='197' y='76' font-size='11' font-weight='700' fill='#64748b'>75</text>"
+        "<text x='232' y='150' font-size='11' font-weight='700' fill='#64748b'>100</text>"
         f"<text x='140' y='114' text-anchor='middle' font-size='52' font-weight='900' fill='{accent_color}'>{int(round(score))}</text>"
-        f"<text x='140' y='136' text-anchor='middle' font-size='16' font-weight='800' fill='{accent_color}'>{status}</text>"
+        f"<text x='140' y='138' text-anchor='middle' font-size='15' font-weight='800' fill='{accent_color}'>{status}</text>"
         "</svg>"
         "</div>"
+    )
+
+
+def build_fear_greed_gauge_segment(*, start: float, end: float, color: str, opacity: float) -> str:
+    visible_length = max(0.0, end - start)
+    if visible_length <= 0:
+        return ""
+
+    gap = 1.2
+    adjusted_start = start + (gap / 2)
+    adjusted_length = max(0.8, visible_length - gap)
+    return (
+        f"<path d='M 40 140 A 100 100 0 0 1 240 140' fill='none' stroke='{color}' "
+        f"stroke-width='18' stroke-linecap='round' pathLength='100' opacity='{opacity:.3f}' "
+        f"stroke-dasharray='{adjusted_length:.3f} 100' stroke-dashoffset='{-adjusted_start:.3f}'/>"
     )
 
 
