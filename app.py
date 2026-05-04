@@ -61,6 +61,7 @@ def main() -> None:
 
     tabs = st.tabs(
         [
+            "대시보드",
             "1. 단일 예측",
             "2. 관심종목",
             "3. 상승확률 Top",
@@ -72,24 +73,135 @@ def main() -> None:
     )
 
     with tabs[0]:
-        render_single_prediction()
+        render_dashboard()
     with tabs[1]:
-        render_watchlist_run()
+        render_single_prediction()
     with tabs[2]:
-        render_top_probability()
+        render_watchlist_run()
     with tabs[3]:
-        render_single_valuation()
+        render_top_probability()
     with tabs[4]:
-        render_top_valuation()
+        render_single_valuation()
     with tabs[5]:
-        render_fear_greed_tab()
+        render_top_valuation()
     with tabs[6]:
+        render_fear_greed_tab()
+    with tabs[7]:
         render_results()
 
 
 def render_header() -> None:
     st.title("주식 분석 프로그램")
     st.caption("1-5단계 실행 및 결과 조회")
+
+
+def render_dashboard() -> None:
+    user_id = get_active_user_id()
+    st.subheader("오늘의 요약")
+    st.caption("자주 보는 핵심 정보만 먼저 모아봤습니다.")
+
+    left, right = st.columns([0.62, 0.38], gap="large")
+
+    with left:
+        st.markdown("**내일 상승확률 높은 종목**")
+        top_frame = load_dashboard_top_probability(user_id)
+        if top_frame.empty:
+            st.info("아직 저장된 상승확률 결과가 없습니다. `3. 상승확률 Top`을 한 번 실행하면 여기서 바로 볼 수 있습니다.")
+        else:
+            st.dataframe(top_frame, use_container_width=True, hide_index=True)
+
+        st.markdown("**등록된 관심종목**")
+        watchlist_frame = load_dashboard_watchlist(user_id)
+        if watchlist_frame.empty:
+            st.info("등록된 관심종목이 없습니다. `2. 관심종목` 탭에서 검색해서 추가해보세요.")
+        else:
+            st.dataframe(watchlist_frame, use_container_width=True, hide_index=True)
+
+    with right:
+        st.markdown("**공포탐욕 지수**")
+        render_dashboard_fear_greed()
+
+
+def load_dashboard_top_probability(user_id: str) -> pd.DataFrame:
+    latest_top = latest_file(user_outputs_dir(user_id) / "top_market_cap", "top*.csv")
+    if latest_top is None:
+        latest_top = latest_file(user_outputs_dir(user_id) / "watchlist_runs", "predictions.csv")
+    if latest_top is None or not latest_top.exists():
+        return pd.DataFrame()
+
+    frame = pd.read_csv(latest_top)
+    normalized = frame.copy()
+    rename_map = {
+        "ticker": "종목코드",
+        "name": "종목명",
+        "probability_up": "상승확률",
+        "signal": "판단",
+        "latest_close": "종가",
+        "up_probability": "상승확률",
+    }
+    normalized = normalized.rename(columns={key: value for key, value in rename_map.items() if key in normalized.columns})
+
+    if "상승확률" not in normalized.columns:
+        return normalized.head(5)
+
+    normalized["상승확률"] = pd.to_numeric(normalized["상승확률"], errors="coerce")
+    normalized = normalized.sort_values("상승확률", ascending=False)
+    display_columns = [column for column in ["종목명", "종목코드", "상승확률", "판단", "종가"] if column in normalized.columns]
+    if not display_columns:
+        return normalized.head(5)
+
+    result = normalized.loc[:, display_columns].head(5).copy()
+    result["상승확률"] = result["상승확률"].map(lambda value: f"{value:.1%}" if pd.notna(value) else "-")
+    if "종가" in result.columns:
+        result["종가"] = result["종가"].map(lambda value: f"{value:,.0f}" if pd.notna(value) else "-")
+    return result
+
+
+def load_dashboard_watchlist(user_id: str) -> pd.DataFrame:
+    items = list_saved_watchlist(user_id)
+    if not items:
+        return pd.DataFrame()
+
+    frame = pd.DataFrame(
+        [
+            {
+                "종목명": item.name or item.symbol,
+                "종목코드": item.symbol,
+                "거래소": item.exchange or "-",
+            }
+            for item in items[:10]
+        ]
+    )
+    return frame
+
+
+def render_dashboard_fear_greed() -> None:
+    try:
+        data = load_fear_greed_data()
+    except Exception as exc:
+        st.warning(f"공포탐욕 지수를 불러오지 못했습니다: {exc}")
+        return
+
+    current = data.summary.iloc[0]
+    c1, c2 = st.columns(2)
+    c1.metric("현재 점수", f"{current['score']:.1f}")
+    c2.metric("상태", str(current["status"]))
+
+    compact_summary = data.summary.copy()
+    compact_summary = compact_summary.rename(
+        columns={
+            "period": "기간",
+            "score": "점수",
+            "status": "상태",
+            "change": "변화",
+        }
+    )
+    keep_columns = [column for column in ["기간", "점수", "상태", "변화"] if column in compact_summary.columns]
+    st.dataframe(compact_summary.loc[:, keep_columns], use_container_width=True, hide_index=True)
+    st.caption(f"기준일: {data.latest_date}")
+
+    if data.source_age_days > 7:
+        st.caption(f"원본 데이터가 {data.source_age_days}일 전 기준이라 최신 반영이 늦을 수 있습니다.")
 
 
 def render_sidebar() -> None:
