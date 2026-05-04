@@ -1,0 +1,7 @@
+numpy>=1.26
+pandas>=2.0
+beautifulsoup4>=4.12
+pykrx>=1.0
+requests>=2.32
+streamlit>=1.55
+yfinance>=0.2
