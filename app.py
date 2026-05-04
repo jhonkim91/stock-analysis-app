@@ -188,14 +188,39 @@ def render_dashboard_top_card(row: dict[str, Any]) -> None:
     signal = str(row.get("판단") or "-")
     close_raw = pd.to_numeric(row.get("종가"), errors="coerce")
     close_label = f"{close_raw:,.0f}" if pd.notna(close_raw) else "-"
+    signal_label, accent_color, badge_bg, badge_fg = dashboard_signal_style(signal)
+    strength_label, _ = describe_prediction_strength(float(probability_raw) if pd.notna(probability_raw) else 0.5)
 
     with st.container(border=True):
         st.caption(ticker)
         st.markdown(f"**{name}**")
+        st.markdown(
+            (
+                f"<div style='display:flex; gap:8px; align-items:center; margin:0.15rem 0 0.6rem 0;'>"
+                f"<span style='display:inline-block; padding:0.2rem 0.55rem; border-radius:999px; "
+                f"background:{badge_bg}; color:{badge_fg}; font-size:0.82rem; font-weight:600;'>{signal_label}</span>"
+                f"<span style='display:inline-block; padding:0.2rem 0.55rem; border-radius:999px; "
+                f"background:#f3f4f6; color:#111827; font-size:0.82rem; font-weight:600;'>{strength_label}</span>"
+                f"</div>"
+            ),
+            unsafe_allow_html=True,
+        )
         metric_left, metric_right = st.columns(2)
         metric_left.metric("상승확률", probability_label)
         metric_right.metric("판단", signal)
-        st.caption(f"최근 종가 {close_label}")
+        st.markdown(
+            f"<div style='color:{accent_color}; font-size:0.95rem; font-weight:600;'>최근 종가 {close_label}</div>",
+            unsafe_allow_html=True,
+        )
+
+
+def dashboard_signal_style(signal: str) -> tuple[str, str, str, str]:
+    normalized = signal.strip().upper()
+    if normalized == "UP":
+        return ("상승 우세", "#15803d", "#dcfce7", "#166534")
+    if normalized == "DOWN":
+        return ("하락 우세", "#c2410c", "#ffedd5", "#9a3412")
+    return ("중립", "#475569", "#e2e8f0", "#334155")
 
 
 def render_dashboard_fear_greed() -> None:
