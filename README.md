@@ -48,6 +48,8 @@ GitHub에 올리고 Streamlit Community Cloud로 배포하는 방법은 아래 �
 
 ```text
 DEPLOY_GITHUB_STREAMLIT.md
+PROJECT_CONTEXT.md
+SUPABASE_SETUP.md
 ```
 
 ## 1단계: 단일 종목 예측
