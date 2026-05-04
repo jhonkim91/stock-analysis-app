@@ -159,11 +159,20 @@ def render_single_prediction() -> None:
             value=True,
             help="이 종목의 최근 검증 구간에서 더 안정적이었던 threshold 후보를 무료로 자동 탐색해 적용합니다.",
         )
+        compare_tree_model = st.checkbox(
+            "무료 트리 모델도 비교",
+            value=False,
+            help=(
+                "로지스틱 회귀와 무료 트리 모델(HistGradientBoosting)을 함께 검증해서 "
+                "최근 성능이 더 안정적인 쪽을 자동으로 선택합니다. 대신 실행 시간이 조금 더 걸립니다."
+            ),
+        )
         with st.expander("입력값 설명", expanded=False):
             st.markdown(
                 "- `조회기간`: 모델이 참고하는 과거 데이터 길이입니다.\n"
                 "- `상승 판단 기준`: 상승 확률을 어디서부터 상승으로 볼지 정합니다.\n"
                 "- `종목별 기준 자동 추천`을 켜면 0.40~0.60 사이 후보 중 이 종목에 더 맞는 기준을 자동 적용합니다.\n"
+                "- `무료 트리 모델도 비교`를 켜면 기본 로지스틱 회귀와 트리 모델을 둘 다 테스트한 뒤 더 나은 쪽을 사용합니다.\n"
                 "- 처음엔 `5y`와 자동 추천 켜짐 상태로 보는 것이 가장 무난합니다."
             )
         run = st.button("예측 실행", type="primary", use_container_width=True)
@@ -178,6 +187,7 @@ def render_single_prediction() -> None:
                     threshold=threshold,
                     compute_walk_forward_metrics=True,
                     optimize_threshold=auto_threshold,
+                    compare_tree_model=compare_tree_model,
                 )
             render_prediction_card(prediction)
         else:
@@ -851,6 +861,44 @@ def describe_prediction_strength(probability_up: float) -> tuple[str, str]:
     return ("매우 높음", "모델이 한쪽 방향을 강하게 보고 있습니다.")
 
 
+def model_basis_label(basis: str) -> str:
+    return "walk-forward" if basis == "walk_forward" else "holdout"
+
+
+def model_primary_metrics(metrics: Any, basis: str) -> tuple[float, float, float]:
+    if basis == "walk_forward" and metrics.walk_forward_accuracy is not None:
+        return (
+            float(metrics.walk_forward_accuracy),
+            float(metrics.walk_forward_balanced_accuracy or 0.0),
+            float(metrics.walk_forward_edge_vs_baseline or 0.0),
+        )
+    return (
+        float(metrics.accuracy),
+        float(metrics.balanced_accuracy),
+        float(metrics.edge_vs_baseline),
+    )
+
+
+def build_model_comparison_frame(prediction: Prediction) -> pd.DataFrame:
+    rows = []
+    for compared in prediction.compared_models:
+        accuracy, balanced_accuracy, edge = model_primary_metrics(
+            compared.metrics,
+            prediction.model_selection_basis,
+        )
+        rows.append(
+            {
+                "모델": f"{compared.label} (선택)" if compared.selected else compared.label,
+                "평가 기준": model_basis_label(prediction.model_selection_basis),
+                "정확도": round(accuracy, 4),
+                "균형 정확도": round(balanced_accuracy, 4),
+                "개선폭": round(edge, 4),
+                "추천 기준": round(compared.metrics.recommended_threshold or 0.5, 4),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def render_prediction_card(prediction: Prediction) -> None:
     metrics = prediction.metrics
     signal_is_up = prediction.signal == "UP"
@@ -862,10 +910,17 @@ def render_prediction_card(prediction: Prediction) -> None:
     st.subheader(f"{prediction.ticker} 예측 결과")
     st.caption(f"기준 거래일: {prediction.latest_date}")
     if prediction.threshold_source == "recommended" and metrics.recommended_threshold is not None:
-        basis_label = "walk-forward" if metrics.recommended_threshold_basis == "walk_forward" else "holdout"
+        basis_label = model_basis_label(metrics.recommended_threshold_basis or "holdout")
         st.caption(
             f"자동 추천 기준 적용: `{prediction.threshold:.2f}` "
             f"(평가 기준: {basis_label}, 개선폭: {metrics.recommended_threshold_edge or 0.0:+.2%}p)"
+        )
+    st.caption(f"사용 모델: `{prediction.model_label}`")
+    if len(prediction.compared_models) > 1:
+        _, _, selected_edge = model_primary_metrics(metrics, prediction.model_selection_basis)
+        st.caption(
+            f"무료 모델 비교 결과: `{prediction.model_label}` 선택 "
+            f"(비교 기준: {model_basis_label(prediction.model_selection_basis)}, 개선폭: {selected_edge:+.2%}p)"
         )
 
     if strength_label == "매우 애매":
@@ -922,6 +977,7 @@ def render_prediction_card(prediction: Prediction) -> None:
         [
             {"항목": "한줄 해석", "값": f"{prediction.ticker}은(는) 현재 {signal_label} 신호입니다."},
             {"항목": "확률 해석", "값": f"상승 {prediction.probability_up:.1%} / 하락 {prediction.probability_down:.1%}"},
+            {"항목": "사용 모델", "값": prediction.model_label},
             {"항목": "초보자 체크", "값": "50%에 가까울수록 애매하고, 50%에서 멀수록 방향성이 더 뚜렷합니다."},
         ]
     )
@@ -937,6 +993,7 @@ def render_prediction_card(prediction: Prediction) -> None:
         detail_row = {
             "최근 거래일": prediction.latest_date,
             "최근 종가": round(prediction.latest_close, 6),
+            "사용 모델": prediction.model_label,
             "모델 검증 정확도": round(metrics.accuracy, 4),
             "균형 정확도": round(metrics.balanced_accuracy, 4),
             "단순 기준 정확도": round(metrics.baseline_accuracy, 4),
@@ -959,8 +1016,15 @@ def render_prediction_card(prediction: Prediction) -> None:
 
         detail_frame = pd.DataFrame([detail_row])
         st.dataframe(detail_frame, use_container_width=True, hide_index=True)
+        if len(prediction.compared_models) > 1:
+            st.caption("모델 비교 요약")
+            st.dataframe(build_model_comparison_frame(prediction), use_container_width=True, hide_index=True)
 
         explanation_rows = [
+            {
+                "지표": "사용 모델",
+                "의미": "이번 종목에서 최근 검증 결과가 더 나았던 모델입니다. 비교 옵션을 켰을 때 자동으로 선택됩니다.",
+            },
             {
                 "지표": "모델 검증 정확도",
                 "의미": "마지막 검증 구간에서 전체 방향을 맞춘 비율입니다.",
@@ -1024,6 +1088,19 @@ def render_prediction_card(prediction: Prediction) -> None:
                     {
                         "지표": "추천 기준 개선폭",
                         "의미": "자동 추천 기준을 적용했을 때 단순 기준보다 얼마나 나은지 보여줍니다.",
+                    },
+                ]
+            )
+        if len(prediction.compared_models) > 1:
+            explanation_rows.extend(
+                [
+                    {
+                        "지표": "모델 비교 요약",
+                        "의미": "로지스틱 회귀와 무료 트리 모델을 같은 데이터로 검증한 뒤 더 나은 모델을 고른 표입니다.",
+                    },
+                    {
+                        "지표": "비교 기준",
+                        "의미": "가능하면 walk-forward 검증으로 비교하고, 그 값이 없으면 holdout 검증 결과로 비교합니다.",
                     },
                 ]
             )

@@ -20,6 +20,9 @@ def main(argv: list[str] | None = None) -> int:
             csv_path=args.csv,
             test_size=args.test_size,
             threshold=args.threshold,
+            compute_walk_forward_metrics=args.walk_forward,
+            optimize_threshold=args.auto_threshold,
+            compare_tree_model=args.compare_tree_model,
         )
     except Exception as exc:
         parser.exit(1, f"Error: {exc}\n")
@@ -56,6 +59,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--csv", help="Yahoo Finance 대신 사용할 CSV 파일 경로입니다.")
     parser.add_argument("--test-size", type=float, default=0.2, help="시간순 검증 데이터 비율입니다.")
     parser.add_argument("--threshold", type=float, default=0.5, help="상승으로 판단할 확률 기준입니다.")
+    parser.add_argument("--walk-forward", action="store_true", help="Walk-forward 검증 수치까지 함께 계산합니다.")
+    parser.add_argument("--auto-threshold", action="store_true", help="종목별 자동 threshold 추천을 적용합니다.")
+    parser.add_argument(
+        "--compare-tree-model",
+        action="store_true",
+        help="로지스틱 회귀와 무료 트리 모델을 비교해서 더 나은 모델을 자동 선택합니다.",
+    )
     parser.add_argument("--json", action="store_true", help="결과를 JSON으로 출력합니다.")
     parser.add_argument("--output", help="결과 JSON을 저장할 파일 경로입니다.")
     return parser
@@ -72,6 +82,7 @@ def print_human_readable(prediction: Prediction) -> None:
     print(f"예측: {signal_kr}")
     print(f"상승 확률: {prediction.probability_up:.2%}")
     print(f"하락 확률: {prediction.probability_down:.2%}")
+    print(f"사용 모델: {prediction.model_label}")
     print()
     print("[시간순 검증 결과]")
     print(f"학습 행 수: {metrics.train_rows:,}")

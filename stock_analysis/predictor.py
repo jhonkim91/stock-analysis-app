@@ -5,7 +5,7 @@ from pathlib import Path
 
 from stock_analysis.data import benchmark_symbol_for_ticker, load_history, normalize_ticker
 from stock_analysis.features import FEATURE_COLUMNS, build_training_frame, latest_feature_row
-from stock_analysis.model import Metrics, train_direction_model
+from stock_analysis.model import Metrics, ModelComparison, train_direction_model
 
 
 @dataclass
@@ -18,6 +18,10 @@ class Prediction:
     signal: str
     threshold: float
     threshold_source: str
+    model_name: str
+    model_label: str
+    model_selection_basis: str
+    compared_models: list[ModelComparison]
     metrics: Metrics
 
     def to_dict(self) -> dict:
@@ -37,6 +41,7 @@ def predict_next_day(
     threshold: float = 0.5,
     compute_walk_forward_metrics: bool = False,
     optimize_threshold: bool = False,
+    compare_tree_model: bool = False,
 ) -> Prediction:
     symbol = normalize_ticker(ticker, exchange)
     history = load_history(symbol, period=period, interval=interval, csv_path=csv_path)
@@ -60,6 +65,7 @@ def predict_next_day(
         threshold=threshold,
         compute_walk_forward_metrics=compute_walk_forward_metrics,
         optimize_threshold=optimize_threshold,
+        compare_tree_model=compare_tree_model,
     )
     probability_up = float(result.model.predict_proba(latest_row.to_numpy(dtype=float))[0])
     threshold_to_use = (
@@ -79,5 +85,9 @@ def predict_next_day(
         signal=signal,
         threshold=threshold_to_use,
         threshold_source="recommended" if optimize_threshold else "manual",
+        model_name=result.model_name,
+        model_label=result.model_label,
+        model_selection_basis=result.model_selection_basis,
+        compared_models=result.compared_models,
         metrics=result.metrics,
     )

@@ -1,9 +1,22 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Callable, Protocol
 
 import numpy as np
 import pandas as pd
+from sklearn.ensemble import HistGradientBoostingClassifier
+
+
+class ProbabilityModel(Protocol):
+    def fit(self, x: np.ndarray, y: np.ndarray) -> "ProbabilityModel":
+        ...
+
+    def predict_proba(self, x: np.ndarray) -> np.ndarray:
+        ...
+
+    def predict(self, x: np.ndarray, *, threshold: float = 0.5) -> np.ndarray:
+        ...
 
 
 @dataclass
@@ -29,8 +42,35 @@ class Metrics:
 
 
 @dataclass
+class ModelComparison:
+    name: str
+    label: str
+    metrics: Metrics
+    selected: bool = False
+
+
+@dataclass
 class TrainingResult:
-    model: "LogisticDirectionModel"
+    model: ProbabilityModel
+    model_name: str
+    model_label: str
+    model_selection_basis: str
+    metrics: Metrics
+    compared_models: list[ModelComparison]
+
+
+@dataclass(frozen=True)
+class _CandidateSpec:
+    name: str
+    label: str
+    factory: Callable[[], ProbabilityModel]
+
+
+@dataclass
+class _EvaluatedCandidate:
+    name: str
+    label: str
+    model: ProbabilityModel
     metrics: Metrics
 
 
@@ -87,6 +127,34 @@ class LogisticDirectionModel:
         return (self.predict_proba(x) >= threshold).astype(int)
 
 
+class HistGradientTreeModel:
+    """Free tree-based classifier using scikit-learn's histogram gradient boosting."""
+
+    def __init__(self) -> None:
+        self.model = HistGradientBoostingClassifier(
+            loss="log_loss",
+            learning_rate=0.05,
+            max_depth=3,
+            max_iter=180,
+            min_samples_leaf=20,
+            l2_regularization=0.05,
+            random_state=42,
+        )
+
+    def fit(self, x: np.ndarray, y: np.ndarray) -> "HistGradientTreeModel":
+        self.model.fit(x, y.astype(int))
+        return self
+
+    def predict_proba(self, x: np.ndarray) -> np.ndarray:
+        if x.ndim == 1:
+            x = x.reshape(1, -1)
+        probabilities = self.model.predict_proba(x)
+        return _ensure_probability_vector(probabilities)
+
+    def predict(self, x: np.ndarray, *, threshold: float = 0.5) -> np.ndarray:
+        return (self.predict_proba(x) >= threshold).astype(int)
+
+
 def train_direction_model(
     frame: pd.DataFrame,
     feature_columns: list[str],
@@ -96,6 +164,7 @@ def train_direction_model(
     compute_walk_forward_metrics: bool = False,
     optimize_threshold: bool = False,
     threshold_candidates: list[float] | None = None,
+    compare_tree_model: bool = False,
 ) -> TrainingResult:
     if not 0 < test_size < 0.5:
         raise ValueError("test_size must be greater than 0 and smaller than 0.5.")
@@ -112,15 +181,71 @@ def train_direction_model(
     if train_rows < 120:
         raise ValueError("Not enough rows remain for training after the test split.")
 
+    candidate_specs = [
+        _CandidateSpec("logistic", "로지스틱 회귀", LogisticDirectionModel),
+    ]
+    if compare_tree_model:
+        candidate_specs.append(
+            _CandidateSpec("tree", "무료 트리 모델", HistGradientTreeModel),
+        )
+
+    evaluated_candidates = [
+        _evaluate_candidate(
+            spec=spec,
+            x=x,
+            y=y,
+            train_rows=train_rows,
+            test_rows=test_rows,
+            threshold=threshold,
+            compute_walk_forward_metrics=compute_walk_forward_metrics,
+            optimize_threshold=optimize_threshold,
+            threshold_candidates=threshold_candidates,
+        )
+        for spec in candidate_specs
+    ]
+
+    selected_candidate = max(evaluated_candidates, key=_candidate_selection_key)
+    selection_basis = _selection_basis(selected_candidate.metrics)
+
+    compared_models = [
+        ModelComparison(
+            name=candidate.name,
+            label=candidate.label,
+            metrics=candidate.metrics,
+            selected=candidate.name == selected_candidate.name,
+        )
+        for candidate in evaluated_candidates
+    ]
+
+    return TrainingResult(
+        model=selected_candidate.model,
+        model_name=selected_candidate.name,
+        model_label=selected_candidate.label,
+        model_selection_basis=selection_basis,
+        metrics=selected_candidate.metrics,
+        compared_models=compared_models,
+    )
+
+
+def _evaluate_candidate(
+    *,
+    spec: _CandidateSpec,
+    x: np.ndarray,
+    y: np.ndarray,
+    train_rows: int,
+    test_rows: int,
+    threshold: float,
+    compute_walk_forward_metrics: bool,
+    optimize_threshold: bool,
+    threshold_candidates: list[float] | None,
+) -> _EvaluatedCandidate:
     x_train, x_test = x[:train_rows], x[train_rows:]
     y_train, y_test = y[:train_rows], y[train_rows:]
 
-    evaluation_model = LogisticDirectionModel().fit(x_train, y_train)
-    holdout_probabilities = evaluation_model.predict_proba(x_test)
-
-    # Touch probabilities so static analyzers do not mistake this for an unused pipeline output.
+    evaluation_model = spec.factory().fit(x_train, y_train)
+    holdout_probabilities = _ensure_probability_vector(evaluation_model.predict_proba(x_test))
     if not np.isfinite(holdout_probabilities).all():
-        raise RuntimeError("Model produced non-finite probabilities.")
+        raise RuntimeError(f"{spec.label} produced non-finite probabilities.")
 
     walk_forward_probabilities: np.ndarray | None = None
     walk_forward_actuals: np.ndarray | None = None
@@ -129,6 +254,7 @@ def train_direction_model(
             x=x,
             y=y,
             start_index=train_rows,
+            model_factory=spec.factory,
         )
 
     recommendation = None
@@ -153,9 +279,11 @@ def train_direction_model(
         walk_forward_metrics = _classification_metrics(walk_forward_actuals, walk_forward_predicted)
         walk_forward_metrics["rows"] = float(len(walk_forward_actuals))
 
-    final_model = LogisticDirectionModel().fit(x, y)
+    final_model = spec.factory().fit(x, y)
 
-    return TrainingResult(
+    return _EvaluatedCandidate(
+        name=spec.name,
+        label=spec.label,
         model=final_model,
         metrics=Metrics(
             accuracy=holdout_metrics["accuracy"],
@@ -193,6 +321,15 @@ def _sigmoid(values: np.ndarray) -> np.ndarray:
     return 1 / (1 + np.exp(-clipped))
 
 
+def _ensure_probability_vector(probabilities: np.ndarray) -> np.ndarray:
+    values = np.asarray(probabilities, dtype=float)
+    if values.ndim == 2:
+        if values.shape[1] < 2:
+            raise ValueError("predict_proba must expose at least two class columns.")
+        return values[:, 1]
+    return values.reshape(-1)
+
+
 def _classification_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, float]:
     accuracy = float((y_pred == y_true).mean())
     positive_rate = float(y_true.mean())
@@ -225,13 +362,14 @@ def _walk_forward_probabilities(
     x: np.ndarray,
     y: np.ndarray,
     start_index: int,
+    model_factory: Callable[[], ProbabilityModel],
 ) -> tuple[np.ndarray, np.ndarray]:
     probabilities: list[float] = []
     actuals: list[float] = []
 
     for index in range(start_index, len(x)):
-        model = LogisticDirectionModel().fit(x[:index], y[:index])
-        probability = float(model.predict_proba(x[index])[0])
+        model = model_factory().fit(x[:index], y[:index])
+        probability = float(_ensure_probability_vector(model.predict_proba(x[index]))[0])
         probabilities.append(probability)
         actuals.append(float(y[index]))
 
@@ -294,4 +432,34 @@ def _recommendation_key(payload: dict[str, float | str]) -> tuple[float, float, 
         float(payload["balanced_accuracy"]),
         float(payload["accuracy"]),
         -abs(threshold - 0.5),
+    )
+
+
+def _selection_basis(metrics: Metrics) -> str:
+    if metrics.walk_forward_accuracy is not None:
+        return "walk_forward"
+    return "holdout"
+
+
+def _candidate_selection_key(candidate: _EvaluatedCandidate) -> tuple[float, float, float, float, float, float]:
+    metrics = candidate.metrics
+    if metrics.walk_forward_accuracy is not None:
+        primary_edge = float(metrics.walk_forward_edge_vs_baseline or 0.0)
+        primary_balanced = float(metrics.walk_forward_balanced_accuracy or 0.0)
+        primary_accuracy = float(metrics.walk_forward_accuracy)
+        primary_basis = 1.0
+    else:
+        primary_edge = float(metrics.edge_vs_baseline)
+        primary_balanced = float(metrics.balanced_accuracy)
+        primary_accuracy = float(metrics.accuracy)
+        primary_basis = 0.0
+
+    simplicity_bonus = 1.0 if candidate.name == "logistic" else 0.0
+    return (
+        primary_basis,
+        primary_edge,
+        primary_balanced,
+        primary_accuracy,
+        float(metrics.edge_vs_baseline),
+        simplicity_bonus,
     )
