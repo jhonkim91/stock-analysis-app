@@ -27,6 +27,7 @@ def fetch_fear_greed_data(*, timeout: int = 20) -> FearGreedData:
         raise ValueError("Fear & Greed API did not return success.")
 
     kr_payload = dict(payload.get("kr") or {})
+    historical_payload = dict(payload.get("historical") or {})
     history = pd.DataFrame(payload.get("history", []))
     if history.empty:
         raise ValueError("Fear & Greed history is empty.")
@@ -37,17 +38,28 @@ def fetch_fear_greed_data(*, timeout: int = 20) -> FearGreedData:
     history["us_fear_greed"] = pd.to_numeric(history.get("us"), errors="coerce")
     history["kospi_close"] = pd.NA
 
-    latest_timestamp = pd.to_datetime(payload.get("timestamp"))
-    latest_date = latest_timestamp.date().isoformat()
-    source_age_days = (date.today() - latest_timestamp.date()).days
+    latest_history_date = history["date"].max().date()
+    latest_date = latest_history_date.isoformat()
+    source_age_days = (date.today() - latest_history_date).days
 
     current_score = float(kr_payload.get("score") or history["fear_greed"].dropna().iloc[-1])
+    week_ago_score = _optional_float(historical_payload.get("week_ago"))
+    month_ago_score = _optional_float(historical_payload.get("month_ago"))
+    year_ago_score = _optional_float(historical_payload.get("year_ago"))
+
+    if week_ago_score is None:
+        week_ago_score = _history_score_ago(history, days=7)
+    if month_ago_score is None:
+        month_ago_score = _history_score_ago(history, days=30)
+    if year_ago_score is None:
+        year_ago_score = _history_score_ago(history, days=365)
+
     summary = pd.DataFrame(
         [
-            _summary_row("현재", current_score),
-            _history_summary_row("1주 전", history, current_score, days=7),
-            _history_summary_row("1개월 전", history, current_score, days=30),
-            _history_summary_row("1년 전", history, current_score, days=365),
+            _summary_row("현재", current_score, status_override=str(kr_payload.get("label") or "").strip() or None),
+            _summary_row("1주 전", week_ago_score, current_score=current_score),
+            _summary_row("1개월 전", month_ago_score, current_score=current_score),
+            _summary_row("1년 전", year_ago_score, current_score=current_score),
         ]
     )
 
@@ -85,14 +97,21 @@ def _get_json(url: str, *, timeout: int) -> dict:
     return response.json()
 
 
-def _history_summary_row(label: str, history: pd.DataFrame, current_score: float, *, days: int) -> dict:
+def _history_score_ago(history: pd.DataFrame, *, days: int) -> float | None:
     cutoff = history["date"].max() - pd.Timedelta(days=days)
     candidates = history.loc[history["date"] <= cutoff, "fear_greed"].dropna()
-    score = float(candidates.iloc[-1]) if not candidates.empty else None
-    return _summary_row(label, score, current_score=current_score)
+    if candidates.empty:
+        return None
+    return float(candidates.iloc[-1])
 
 
-def _summary_row(label: str, score: float | None, *, current_score: float | None = None) -> dict:
+def _summary_row(
+    label: str,
+    score: float | None,
+    *,
+    current_score: float | None = None,
+    status_override: str | None = None,
+) -> dict:
     numeric = None if score is None else float(score)
     change = None
     if numeric is not None and current_score is not None:
@@ -100,7 +119,7 @@ def _summary_row(label: str, score: float | None, *, current_score: float | None
     return {
         "period": label,
         "score": None if numeric is None else round(numeric, 2),
-        "status": score_to_status(numeric),
+        "status": status_override or score_to_status(numeric),
         "change": change,
     }
 
@@ -108,12 +127,21 @@ def _summary_row(label: str, score: float | None, *, current_score: float | None
 def score_to_status(score: float | None) -> str:
     if score is None:
         return "데이터 없음"
-    if score <= 20:
+    if score <= 24:
         return "극단적 공포"
-    if score <= 40:
+    if score <= 44:
         return "공포"
-    if score <= 60:
+    if score <= 54:
         return "중립"
-    if score <= 80:
+    if score <= 74:
         return "탐욕"
     return "극단적 탐욕"
+
+
+def _optional_float(value: object) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None

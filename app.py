@@ -231,9 +231,27 @@ def render_dashboard_fear_greed() -> None:
         return
 
     current = data.summary.iloc[0]
-    c1, c2 = st.columns(2)
-    c1.metric("현재 점수", f"{current['score']:.1f}")
-    c2.metric("상태", str(current["status"]))
+    score = float(current["score"])
+    status = str(current["status"])
+    accent_color, badge_bg, badge_fg = fear_greed_palette(score)
+
+    with st.container(border=True):
+        st.markdown(
+            (
+                "<div style='display:flex; justify-content:space-between; align-items:flex-start; gap:12px;'>"
+                "<div>"
+                "<div style='font-size:0.9rem; color:#6b7280; margin-bottom:0.35rem;'>한국 공포탐욕지수</div>"
+                f"<div style='font-size:2.2rem; font-weight:800; color:{accent_color}; line-height:1;'>{score:.1f}</div>"
+                f"<div style='margin-top:0.5rem; display:inline-block; padding:0.28rem 0.7rem; border-radius:999px; "
+                f"background:{badge_bg}; color:{badge_fg}; font-size:0.86rem; font-weight:700;'>{status}</div>"
+                "</div>"
+                f"<div style='font-size:0.82rem; color:#6b7280; text-align:right;'>기준일<br><strong style=\"color:#111827;\">{data.latest_date}</strong></div>"
+                "</div>"
+            ),
+            unsafe_allow_html=True,
+        )
+        st.progress(max(0, min(100, int(round(score)))))
+        st.caption("0-24 극단적 공포 · 25-44 공포 · 45-54 중립 · 55-74 탐욕 · 75-100 극단적 탐욕")
 
     compact_summary = data.summary.copy()
     compact_summary = compact_summary.rename(
@@ -246,10 +264,21 @@ def render_dashboard_fear_greed() -> None:
     )
     keep_columns = [column for column in ["기간", "점수", "상태", "변화"] if column in compact_summary.columns]
     st.dataframe(compact_summary.loc[:, keep_columns], use_container_width=True, hide_index=True)
-    st.caption(f"기준일: {data.latest_date}")
 
     if data.source_age_days > 7:
         st.caption(f"원본 데이터가 {data.source_age_days}일 전 기준이라 최신 반영이 늦을 수 있습니다.")
+
+
+def fear_greed_palette(score: float) -> tuple[str, str, str]:
+    if score <= 24:
+        return ("#dc2626", "#fee2e2", "#991b1b")
+    if score <= 44:
+        return ("#ea580c", "#ffedd5", "#9a3412")
+    if score <= 54:
+        return ("#ca8a04", "#fef3c7", "#854d0e")
+    if score <= 74:
+        return ("#16a34a", "#dcfce7", "#166534")
+    return ("#059669", "#d1fae5", "#065f46")
 
 
 def render_sidebar() -> None:
