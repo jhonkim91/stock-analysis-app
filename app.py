@@ -128,14 +128,8 @@ def render_single_prediction() -> None:
             help="한국 종목코드(예: 005930), 한국 종목명(예: 삼성전자), 미국 티커(예: AAPL), 미국 종목명(예: Apple)을 입력할 수 있습니다.",
         )
         st.caption("예: 005930, 삼성전자, AAPL, Apple")
-        exchange = st.selectbox(
-            "거래소",
-            ["", "KS", "KQ", "KOSPI", "KOSDAQ"],
-            index=1,
-            key="single_pred_exchange",
-            help="한국 6자리 코드만 입력했을 때 어느 시장으로 해석할지 정합니다. 미국 종목은 비워둬도 됩니다.",
-        )
-        render_stock_candidates(ticker, exchange, key_prefix="single_pred")
+        st.caption("거래소는 검색 결과를 바탕으로 자동 판별합니다.")
+        render_stock_candidates(ticker, "", key_prefix="single_pred")
         period = st.selectbox(
             "조회기간",
             ["2y", "5y", "10y"],
@@ -179,7 +173,6 @@ def render_single_prediction() -> None:
             with st.spinner("예측 중"):
                 prediction = predict_next_day(
                     ticker,
-                    exchange=exchange or None,
                     period=period,
                     threshold=threshold,
                     compute_walk_forward_metrics=True,
@@ -196,9 +189,8 @@ def render_watchlist_run() -> None:
     left, right = st.columns([0.4, 0.6], gap="large")
     with left:
         query = st.text_input("종목 검색", value="", key="watchlist_search_query")
-        exchange = st.selectbox("거래소", ["", "KS", "KQ", "KOSPI", "KOSDAQ"], index=0, key="watchlist_search_exchange")
-        st.caption("이름이나 코드를 검색한 뒤 원하는 종목을 바로 등록할 수 있습니다.")
-        render_watchlist_search(user_id, query, exchange)
+        st.caption("이름이나 코드를 검색하면 거래소를 자동으로 찾아서 바로 등록할 수 있습니다.")
+        render_watchlist_search(user_id, query, "")
         st.divider()
         period = st.selectbox("조회기간", ["2y", "5y", "10y"], index=1, key="watchlist_period")
         limit_enabled = st.checkbox("실행 종목 수 제한", value=False)
@@ -306,8 +298,8 @@ def render_single_valuation() -> None:
     with left:
         ticker = st.text_input("종목코드/이름", value="005930", key="valuation_ticker")
         st.caption("예: 005930, 삼성전자, AAPL, Apple")
-        exchange = st.selectbox("거래소", ["", "KS", "KQ", "KOSPI", "KOSDAQ"], index=1, key="valuation_exchange")
-        render_stock_candidates(ticker, exchange, key_prefix="valuation")
+        st.caption("거래소는 검색 결과를 바탕으로 자동 판별합니다.")
+        render_stock_candidates(ticker, "", key_prefix="valuation")
         use_custom = st.checkbox("가정 직접 입력", value=False)
         target_pe = st.number_input("목표 PER", min_value=0.1, max_value=100.0, value=12.0, disabled=not use_custom)
         target_pbr = st.number_input("목표 PBR", min_value=0.1, max_value=20.0, value=1.4, disabled=not use_custom)
@@ -320,7 +312,6 @@ def render_single_valuation() -> None:
             with st.spinner("목표주가 계산 중"):
                 result = calculate_target_price(
                     ticker,
-                    exchange=exchange or None,
                     target_pe=float(target_pe) if use_custom else None,
                     target_pbr=float(target_pbr) if use_custom else None,
                     growth=float(growth) if use_custom else None,

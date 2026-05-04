@@ -19,6 +19,10 @@ def normalize_ticker(ticker: str, exchange: str | None = None) -> str:
         raise ValueError("Ticker is empty.")
 
     if re.fullmatch(r"\d{6}", value):
+        if not exchange:
+            resolved = resolve_stock_input(original, exchange_hint=None)
+            if re.fullmatch(r"[0-9A-Z]{6}\.(KS|KQ)", resolved):
+                return resolved
         suffix_map = {
             None: ".KS",
             "KRX": ".KS",
