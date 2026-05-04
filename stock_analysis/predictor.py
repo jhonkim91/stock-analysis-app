@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from stock_analysis.data import load_history, normalize_ticker
+from stock_analysis.data import benchmark_symbol_for_ticker, load_history, normalize_ticker
 from stock_analysis.features import FEATURE_COLUMNS, build_training_frame, latest_feature_row
 from stock_analysis.model import Metrics, train_direction_model
 
@@ -37,8 +37,18 @@ def predict_next_day(
 ) -> Prediction:
     symbol = normalize_ticker(ticker, exchange)
     history = load_history(symbol, period=period, interval=interval, csv_path=csv_path)
-    training_frame = build_training_frame(history)
-    latest_row = latest_feature_row(history)
+
+    benchmark_history = None
+    if not csv_path:
+        benchmark_symbol = benchmark_symbol_for_ticker(symbol, exchange)
+        if benchmark_symbol != symbol:
+            try:
+                benchmark_history = load_history(benchmark_symbol, period=period, interval=interval)
+            except Exception:
+                benchmark_history = None
+
+    training_frame = build_training_frame(history, benchmark_history=benchmark_history)
+    latest_row = latest_feature_row(history, benchmark_history=benchmark_history)
 
     result = train_direction_model(
         training_frame,

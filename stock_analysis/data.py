@@ -58,6 +58,17 @@ def normalize_ticker(ticker: str, exchange: str | None = None) -> str:
     return resolve_stock_input(original, exchange_hint=exchange)
 
 
+def benchmark_symbol_for_ticker(ticker: str, exchange: str | None = None) -> str:
+    normalized_exchange = exchange.upper() if exchange else None
+    upper_ticker = ticker.strip().upper()
+
+    if normalized_exchange in {"KS", "KOSPI", "KRX"} or upper_ticker.endswith(".KS"):
+        return "^KS11"
+    if normalized_exchange in {"KQ", "KOSDAQ"} or upper_ticker.endswith(".KQ"):
+        return "^KQ11"
+    return "SPY"
+
+
 def load_history(
     ticker: str,
     *,

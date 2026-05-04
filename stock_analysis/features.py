@@ -22,10 +22,17 @@ FEATURE_COLUMNS = [
     "close_position",
     "gap_open",
     "rsi_14",
+    "benchmark_return_1d",
+    "benchmark_return_5d",
+    "benchmark_trend_20",
+    "benchmark_volatility_20",
+    "relative_return_1d",
+    "relative_return_5d",
+    "relative_strength_20",
 ]
 
 
-def build_feature_table(history: pd.DataFrame) -> pd.DataFrame:
+def build_feature_table(history: pd.DataFrame, benchmark_history: pd.DataFrame | None = None) -> pd.DataFrame:
     """Create technical features using only information known at each close."""
     open_price = history["Open"].astype(float)
     high = history["High"].astype(float)
@@ -59,11 +66,24 @@ def build_feature_table(history: pd.DataFrame) -> pd.DataFrame:
     features["gap_open"] = open_price / close.shift(1) - 1
     features["rsi_14"] = _rsi(close, 14) / 100
 
+    benchmark_close = _benchmark_close(history.index, benchmark_history)
+    benchmark_returns = benchmark_close.pct_change()
+    benchmark_sma_20 = benchmark_close.rolling(20).mean()
+    benchmark_volatility_20 = benchmark_returns.rolling(20).std()
+
+    features["benchmark_return_1d"] = benchmark_returns
+    features["benchmark_return_5d"] = benchmark_close.pct_change(5)
+    features["benchmark_trend_20"] = benchmark_close / benchmark_sma_20 - 1
+    features["benchmark_volatility_20"] = benchmark_volatility_20
+    features["relative_return_1d"] = features["return_1d"] - features["benchmark_return_1d"]
+    features["relative_return_5d"] = features["return_5d"] - features["benchmark_return_5d"]
+    features["relative_strength_20"] = features["price_vs_sma_20"] - features["benchmark_trend_20"]
+
     return features.replace([np.inf, -np.inf], np.nan)
 
 
-def build_training_frame(history: pd.DataFrame) -> pd.DataFrame:
-    features = build_feature_table(history)
+def build_training_frame(history: pd.DataFrame, benchmark_history: pd.DataFrame | None = None) -> pd.DataFrame:
+    features = build_feature_table(history, benchmark_history=benchmark_history)
     close = history["Close"].astype(float)
     next_close = close.shift(-1)
 
@@ -73,11 +93,21 @@ def build_training_frame(history: pd.DataFrame) -> pd.DataFrame:
     return frame.dropna(subset=FEATURE_COLUMNS + ["target_up"])
 
 
-def latest_feature_row(history: pd.DataFrame) -> pd.Series:
-    features = build_feature_table(history).dropna(subset=FEATURE_COLUMNS)
+def latest_feature_row(history: pd.DataFrame, benchmark_history: pd.DataFrame | None = None) -> pd.Series:
+    features = build_feature_table(history, benchmark_history=benchmark_history).dropna(subset=FEATURE_COLUMNS)
     if features.empty:
         raise ValueError("Not enough recent rows to build a latest feature row.")
     return features.iloc[-1].loc[FEATURE_COLUMNS]
+
+
+def _benchmark_close(index: pd.Index, benchmark_history: pd.DataFrame | None) -> pd.Series:
+    if benchmark_history is None or benchmark_history.empty or "Close" not in benchmark_history.columns:
+        return pd.Series(1.0, index=index, dtype=float)
+
+    benchmark_close = benchmark_history["Close"].astype(float).reindex(index).ffill().bfill()
+    if benchmark_close.isna().all():
+        return pd.Series(1.0, index=index, dtype=float)
+    return benchmark_close
 
 
 def _rsi(close: pd.Series, window: int) -> pd.Series:

@@ -9,7 +9,9 @@ import pandas as pd
 @dataclass
 class Metrics:
     accuracy: float
+    balanced_accuracy: float
     baseline_accuracy: float
+    edge_vs_baseline: float
     precision_up: float
     recall_up: float
     train_rows: int
@@ -112,9 +114,13 @@ def train_direction_model(
     true_positive = float(((predicted == 1) & (y_test == 1)).sum())
     false_positive = float(((predicted == 1) & (y_test == 0)).sum())
     false_negative = float(((predicted == 0) & (y_test == 1)).sum())
+    true_negative = float(((predicted == 0) & (y_test == 0)).sum())
 
     precision_up = true_positive / (true_positive + false_positive) if true_positive + false_positive else 0.0
     recall_up = true_positive / (true_positive + false_negative) if true_positive + false_negative else 0.0
+    recall_down = true_negative / (true_negative + false_positive) if true_negative + false_positive else 0.0
+    balanced_accuracy = float((recall_up + recall_down) / 2)
+    edge_vs_baseline = float(accuracy - baseline_accuracy)
 
     # Touch probabilities so static analyzers do not mistake this for an unused pipeline output.
     if not np.isfinite(probabilities).all():
@@ -124,7 +130,9 @@ def train_direction_model(
         model=model,
         metrics=Metrics(
             accuracy=accuracy,
+            balanced_accuracy=balanced_accuracy,
             baseline_accuracy=baseline_accuracy,
+            edge_vs_baseline=edge_vs_baseline,
             precision_up=float(precision_up),
             recall_up=float(recall_up),
             train_rows=train_rows,
