@@ -100,7 +100,6 @@ def render_sidebar() -> None:
     if config:
         render_supabase_auth_section(config, auth_user)
     else:
-        st.sidebar.caption("현재는 로컬 프로필 모드입니다. Supabase를 연결하면 실제 로그인으로 전환됩니다.")
         recent_users = list_user_ids()
         if recent_users:
             st.sidebar.caption("최근 사용자 ID")
@@ -108,8 +107,6 @@ def render_sidebar() -> None:
         st.sidebar.text_input("사용자 ID", value="guest", key="app_user_id")
         user_id = get_active_user_id()
         st.sidebar.caption(f"현재 저장 프로필: `{user_id}`")
-        st.sidebar.caption(f"관심종목 저장: {user_data_dir(user_id)}")
-        st.sidebar.caption(f"결과 저장: {user_outputs_dir(user_id)}")
 
     st.sidebar.divider()
     st.sidebar.header("실행 기본값")
@@ -570,12 +567,9 @@ def get_authenticated_user() -> AuthenticatedUser | None:
 
 
 def render_supabase_auth_section(config, auth_user: AuthenticatedUser | None) -> None:
-    st.sidebar.caption("Supabase 계정 모드가 활성화되어 있습니다.")
     if auth_user:
         st.sidebar.success(f"로그인됨: {auth_user.email or auth_user.user_id}")
         st.sidebar.caption(f"계정 ID: `{auth_user.user_id}`")
-        st.sidebar.caption(f"관심종목 저장: Supabase")
-        st.sidebar.caption(f"결과 저장: Supabase + {user_outputs_dir(auth_user.user_id)}")
         if st.sidebar.button("로그아웃", use_container_width=True):
             try:
                 sign_out_supabase(config, auth_user.access_token, auth_user.refresh_token)
@@ -610,9 +604,7 @@ def render_supabase_auth_section(config, auth_user: AuthenticatedUser | None) ->
             st.sidebar.error(f"계정 처리 중 오류가 발생했습니다: {exc}")
 
     guest_id = get_active_user_id()
-    st.sidebar.info("로그인하지 않으면 현재 브라우저 세션의 임시 게스트 프로필로 동작합니다.")
     st.sidebar.caption(f"임시 프로필: `{guest_id}`")
-    st.sidebar.caption(f"임시 결과 저장: {user_outputs_dir(guest_id)}")
 
 
 def get_active_user_id() -> str:
