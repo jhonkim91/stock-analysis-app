@@ -7,7 +7,9 @@ import pandas as pd
 import streamlit as st
 
 from stock_analysis.auto_runner import run_watchlist
+from stock_analysis.fear_greed import fetch_fear_greed_data
 from stock_analysis.predictor import Prediction, predict_next_day
+from stock_analysis.stock_search import search_stock_candidates
 from stock_analysis.top_candidates import run_top_market_cap_screen
 from stock_analysis.valuation import ValuationResult, calculate_target_price
 from stock_analysis.valuation_screen import run_valuation_screen
@@ -36,6 +38,7 @@ def main() -> None:
             "3. 상승확률 Top",
             "4. 목표주가",
             "5. 상승여력 Top",
+            "공포탐욕 지수",
             "결과",
         ]
     )
@@ -51,6 +54,8 @@ def main() -> None:
     with tabs[4]:
         render_top_valuation()
     with tabs[5]:
+        render_fear_greed_tab()
+    with tabs[6]:
         render_results()
 
 
@@ -72,8 +77,10 @@ def render_sidebar() -> None:
 def render_single_prediction() -> None:
     left, right = st.columns([0.35, 0.65], gap="large")
     with left:
-        ticker = st.text_input("종목코드", value="005930", key="single_pred_ticker")
+        ticker = st.text_input("종목코드/이름", value="005930", key="single_pred_ticker")
+        st.caption("예: 005930, 삼성전자, AAPL, Apple")
         exchange = st.selectbox("거래소", ["", "KS", "KQ", "KOSPI", "KOSDAQ"], index=1, key="single_pred_exchange")
+        render_stock_candidates(ticker, exchange, key_prefix="single_pred")
         period = st.selectbox("조회기간", ["2y", "5y", "10y"], index=1, key="single_pred_period")
         threshold = st.slider("상승 판단 기준", 0.1, 0.9, 0.5, 0.05)
         run = st.button("예측 실행", type="primary", use_container_width=True)
@@ -167,8 +174,10 @@ def render_top_probability() -> None:
 def render_single_valuation() -> None:
     left, right = st.columns([0.35, 0.65], gap="large")
     with left:
-        ticker = st.text_input("종목코드", value="005930", key="valuation_ticker")
+        ticker = st.text_input("종목코드/이름", value="005930", key="valuation_ticker")
+        st.caption("예: 005930, 삼성전자, AAPL, Apple")
         exchange = st.selectbox("거래소", ["", "KS", "KQ", "KOSPI", "KOSDAQ"], index=1, key="valuation_exchange")
+        render_stock_candidates(ticker, exchange, key_prefix="valuation")
         use_custom = st.checkbox("가정 직접 입력", value=False)
         target_pe = st.number_input("목표 PER", min_value=0.1, max_value=100.0, value=12.0, disabled=not use_custom)
         target_pbr = st.number_input("목표 PBR", min_value=0.1, max_value=20.0, value=1.4, disabled=not use_custom)
@@ -237,6 +246,59 @@ def render_top_valuation() -> None:
             render_latest_csv_preview("outputs/target_market_cap", "top*.csv", key_prefix="top_valuation_latest")
 
 
+def render_fear_greed_tab() -> None:
+    left, right = st.columns([0.36, 0.64], gap="large")
+    with left:
+        refresh = st.button("지표 새로고침", type="primary", use_container_width=True)
+        if refresh:
+            load_fear_greed_data.clear()
+
+        with st.spinner("공포탐욕 지표 로딩 중"):
+            data = load_fear_greed_data()
+
+        current = data.summary.iloc[0]
+        c1, c2 = st.columns(2)
+        c1.metric("현재 지수", f"{current['score']:.1f}")
+        c2.metric("상태", str(current["status"]))
+        st.caption(f"원본 사이트: {data.source_url}")
+        st.caption(f"원본 데이터 기준일: {data.latest_date}")
+
+        if data.source_age_days > 7:
+            today_label = pd.Timestamp.today().date().isoformat()
+            st.warning(
+                f"원본 데이터 최신일이 {data.latest_date}입니다. "
+                f"오늘({today_label}) 기준 {data.source_age_days}일 이전 데이터입니다."
+            )
+
+        st.subheader("비교 구간")
+        st.dataframe(data.summary, use_container_width=True, hide_index=True)
+
+        st.subheader("세부 팩터")
+        st.dataframe(data.factors, use_container_width=True, hide_index=True)
+
+    with right:
+        st.subheader("최근 공포탐욕 타임라인")
+        recent = data.timeline.tail(120).copy()
+        recent_fg = recent.loc[:, ["date", "fear_greed"]].set_index("date")
+        st.line_chart(recent_fg, use_container_width=True)
+
+        st.subheader("최근 코스피 지수")
+        recent_kospi = recent.loc[:, ["date", "kospi_close"]].set_index("date")
+        st.line_chart(recent_kospi, use_container_width=True)
+
+        st.subheader("해석 기준")
+        guide = pd.DataFrame(
+            [
+                {"range": "0-20", "meaning": "극도의 공포"},
+                {"range": "20-40", "meaning": "공포"},
+                {"range": "40-60", "meaning": "중립"},
+                {"range": "60-80", "meaning": "탐욕"},
+                {"range": "80-100", "meaning": "극도의 탐욕"},
+            ]
+        )
+        st.dataframe(guide, use_container_width=True, hide_index=True)
+
+
 def render_results() -> None:
     result_files = list_result_files()
     if not result_files:
@@ -245,6 +307,42 @@ def render_results() -> None:
 
     selected = st.selectbox("결과 파일", result_files, format_func=lambda path: str(path.relative_to(ROOT)))
     render_csv(selected, key_prefix="results")
+
+
+def render_stock_candidates(query: str, exchange: str, *, key_prefix: str) -> None:
+    value = query.strip()
+    if not value:
+        return
+    if len(value) < 2:
+        st.caption("종목코드 또는 종목명을 입력하세요.")
+        return
+
+    try:
+        candidates = load_stock_candidates(value, exchange or "")
+    except Exception as exc:
+        st.caption(f"검색 후보를 가져오지 못했습니다: {exc}")
+        return
+
+    if not candidates:
+        st.caption("검색 후보가 없습니다.")
+        return
+
+    preview = pd.DataFrame(
+        [
+            {
+                "종목명": item["name"],
+                "심볼": item["symbol"],
+                "거래소": item["exchange"],
+                "출처": item["source"],
+            }
+            for item in candidates[:5]
+        ]
+    )
+    st.dataframe(
+        preview,
+        use_container_width=True,
+        hide_index=True,
+    )
 
 
 def render_prediction_card(prediction: Prediction) -> None:
@@ -354,6 +452,25 @@ def latest_file(base_dir: Path, pattern: str) -> Path | None:
     if not files:
         return None
     return max(files, key=lambda path: path.stat().st_mtime)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_fear_greed_data():
+    return fetch_fear_greed_data()
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_stock_candidates(query: str, exchange: str):
+    return [
+        {
+            "ticker": item.ticker,
+            "exchange": item.exchange,
+            "name": item.name,
+            "symbol": item.symbol,
+            "source": item.source,
+        }
+        for item in search_stock_candidates(query, exchange_hint=exchange or None, limit=8)
+    ]
 
 
 if __name__ == "__main__":

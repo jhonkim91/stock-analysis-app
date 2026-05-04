@@ -5,13 +5,16 @@ from pathlib import Path
 
 import pandas as pd
 
+from stock_analysis.stock_search import resolve_stock_input
+
 
 REQUIRED_COLUMNS = ("Open", "High", "Low", "Close", "Volume")
 
 
 def normalize_ticker(ticker: str, exchange: str | None = None) -> str:
     """Normalize common Korean ticker shortcuts for Yahoo Finance."""
-    value = ticker.strip().upper()
+    original = ticker.strip()
+    value = original.upper()
     if not value:
         raise ValueError("Ticker is empty.")
 
@@ -30,7 +33,13 @@ def normalize_ticker(ticker: str, exchange: str | None = None) -> str:
             raise ValueError(f"Unsupported exchange '{exchange}'. Use one of: {allowed}.")
         return f"{value}{suffix}"
 
-    return value
+    if re.fullmatch(r"\d{6}\.(KS|KQ)", value):
+        return value
+
+    if re.fullmatch(r"[A-Z][A-Z0-9.\-]{0,14}", value):
+        return value
+
+    return resolve_stock_input(original, exchange_hint=exchange)
 
 
 def load_history(
