@@ -40,6 +40,14 @@ http://localhost:8501
 
 웹앱에는 1-5단계 실행 탭과 저장된 CSV 결과 조회 탭이 포함되어 있습니다. 3단계와 5단계는 시간이 오래 걸릴 수 있으므로 처음에는 `시총 수집 수`와 `실행/계산 제한 수`를 작게 두고 테스트하는 구성이 기본입니다.
 
+## GitHub 및 웹 배포
+
+GitHub에 올리고 Streamlit Community Cloud로 배포하는 방법은 아래 문서를 참고하세요.
+
+```text
+DEPLOY_GITHUB_STREAMLIT.md
+```
+
 ## 1단계: 단일 종목 예측
 
 미국 종목:
