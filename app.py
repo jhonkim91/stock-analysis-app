@@ -96,6 +96,7 @@ def render_dashboard() -> None:
     user_id = get_active_user_id()
     st.subheader("오늘의 요약")
     st.caption("자주 보는 핵심 정보만 먼저 모아봤습니다.")
+    detail_open = str(st.query_params.get("fg_detail", "0")) == "1"
 
     left, right = st.columns([0.62, 0.38], gap="large")
 
@@ -118,9 +119,17 @@ def render_dashboard() -> None:
         st.markdown("**공포탐욕 지수**")
         render_dashboard_fear_greed()
 
-    detail_open = st.toggle("공포탐욕 상세 보기", value=False, key="dashboard_fear_greed_detail")
     if detail_open:
         st.divider()
+        st.markdown("<div id='fear-greed-detail'></div>", unsafe_allow_html=True)
+        close_cols = st.columns([0.82, 0.18])
+        with close_cols[1]:
+            if st.button("상세 닫기", use_container_width=True, key="fear_greed_close_detail"):
+                try:
+                    del st.query_params["fg_detail"]
+                except Exception:
+                    st.query_params["fg_detail"] = "0"
+                st.rerun()
         render_fear_greed_detail_section()
 
 
@@ -274,7 +283,8 @@ def build_fear_greed_dashboard_card(data) -> str:
     factors_html = build_fear_greed_factor_rows(data.factors)
 
     return (
-        "<div style='border:1px solid #e5e7eb; background:#f8fafc; border-radius:16px; padding:18px 18px 16px 18px;'>"
+        "<a href='?fg_detail=1#fear-greed-detail' style='text-decoration:none; color:inherit; display:block;'>"
+        "<div style='border:1px solid #e5e7eb; background:#f8fafc; border-radius:16px; padding:18px 18px 16px 18px; cursor:pointer;'>"
         "<div style='display:flex; justify-content:space-between; align-items:flex-start; gap:12px; margin-bottom:10px;'>"
         "<div>"
         "<div style='font-size:0.78rem; letter-spacing:0.18em; text-transform:uppercase; color:#64748b; margin-bottom:0.35rem;'>한국 시장</div>"
@@ -287,9 +297,10 @@ def build_fear_greed_dashboard_card(data) -> str:
         f"{factors_html}"
         "<div style='margin-top:12px; display:flex; align-items:center; justify-content:space-between; gap:12px;'>"
         f"<span style='display:inline-block; padding:0.28rem 0.7rem; border-radius:999px; background:{badge_bg}; color:{badge_fg}; font-size:0.84rem; font-weight:700;'>{status}</span>"
-        "<span style='font-size:0.76rem; color:#64748b;'>0-24 극단적 공포 · 25-44 공포 · 45-54 중립 · 55-74 탐욕 · 75-100 극단적 탐욕</span>"
+        "<span style='font-size:0.76rem; color:#64748b;'>게이지를 누르면 상세 지표가 열립니다</span>"
         "</div>"
         "</div>"
+        "</a>"
     )
 
 
@@ -300,13 +311,14 @@ def build_fear_greed_gauge(*, score: float, status: str, accent_color: str) -> s
         "<svg width='100%' viewBox='0 0 280 170' style='max-width:420px;'>"
         "<path d='M 40 140 A 100 100 0 0 1 240 140' fill='none' stroke='#dbe4f0' stroke-width='16' stroke-linecap='round' pathLength='100'/>"
         f"<path d='M 40 140 A 100 100 0 0 1 240 140' fill='none' stroke='{accent_color}' stroke-width='16' stroke-linecap='round' pathLength='100' stroke-dasharray='{progress} 100'/>"
+        "<circle cx='140' cy='108' r='34' fill='#ffffff' opacity='0.98'/>"
         "<text x='32' y='148' font-size='12' fill='#64748b'>0</text>"
         "<text x='84' y='62' font-size='12' fill='#64748b'>25</text>"
         "<text x='136' y='42' font-size='12' fill='#64748b'>50</text>"
         "<text x='188' y='62' font-size='12' fill='#64748b'>75</text>"
         "<text x='232' y='148' font-size='12' fill='#64748b'>100</text>"
-        f"<text x='140' y='110' text-anchor='middle' font-size='40' font-weight='800' fill='{accent_color}'>{int(round(score))}</text>"
-        f"<text x='140' y='132' text-anchor='middle' font-size='16' font-weight='700' fill='{accent_color}'>{status}</text>"
+        f"<text x='140' y='114' text-anchor='middle' font-size='52' font-weight='900' fill='{accent_color}'>{int(round(score))}</text>"
+        f"<text x='140' y='136' text-anchor='middle' font-size='16' font-weight='800' fill='{accent_color}'>{status}</text>"
         "</svg>"
         "</div>"
     )
