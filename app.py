@@ -67,7 +67,6 @@ def main() -> None:
             "3. 상승확률 Top",
             "4. 목표주가",
             "5. 상승여력 Top",
-            "공포탐욕 지수",
             "결과",
         ]
     )
@@ -85,8 +84,6 @@ def main() -> None:
     with tabs[5]:
         render_top_valuation()
     with tabs[6]:
-        render_fear_greed_tab()
-    with tabs[7]:
         render_results()
 
 
@@ -120,6 +117,11 @@ def render_dashboard() -> None:
     with right:
         st.markdown("**공포탐욕 지수**")
         render_dashboard_fear_greed()
+
+    detail_open = st.toggle("공포탐욕 상세 보기", value=False, key="dashboard_fear_greed_detail")
+    if detail_open:
+        st.divider()
+        render_fear_greed_detail_section()
 
 
 def load_dashboard_top_probability(user_id: str) -> pd.DataFrame:
@@ -570,12 +572,12 @@ def render_top_valuation() -> None:
             render_latest_csv_preview(user_outputs_dir(user_id) / "target_market_cap", "top*.csv", key_prefix="top_valuation_latest")
 
 
-def render_fear_greed_tab() -> None:
+def render_fear_greed_detail_section() -> None:
     left, right = st.columns([0.36, 0.64], gap="large")
     with left:
-        refresh = st.button("지표 새로고침", type="primary", use_container_width=True)
+        refresh = st.button("지표 새로고침", type="primary", use_container_width=True, key="fear_greed_detail_refresh")
         if refresh:
-            load_fear_greed_data.clear()
+            st.rerun()
 
         with st.spinner("공포탐욕 지표 로딩 중"):
             data = load_fear_greed_data()
@@ -1319,7 +1321,6 @@ def latest_file(base_dir: Path, pattern: str) -> Path | None:
     return max(files, key=lambda path: path.stat().st_mtime)
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
 def load_fear_greed_data():
     return fetch_fear_greed_data()
 
