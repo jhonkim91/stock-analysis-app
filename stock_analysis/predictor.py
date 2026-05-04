@@ -17,6 +17,7 @@ class Prediction:
     probability_down: float
     signal: str
     threshold: float
+    threshold_source: str
     metrics: Metrics
 
     def to_dict(self) -> dict:
@@ -35,6 +36,7 @@ def predict_next_day(
     test_size: float = 0.2,
     threshold: float = 0.5,
     compute_walk_forward_metrics: bool = False,
+    optimize_threshold: bool = False,
 ) -> Prediction:
     symbol = normalize_ticker(ticker, exchange)
     history = load_history(symbol, period=period, interval=interval, csv_path=csv_path)
@@ -57,9 +59,15 @@ def predict_next_day(
         test_size=test_size,
         threshold=threshold,
         compute_walk_forward_metrics=compute_walk_forward_metrics,
+        optimize_threshold=optimize_threshold,
     )
     probability_up = float(result.model.predict_proba(latest_row.to_numpy(dtype=float))[0])
-    signal = "UP" if probability_up >= threshold else "DOWN"
+    threshold_to_use = (
+        float(result.metrics.recommended_threshold)
+        if optimize_threshold and result.metrics.recommended_threshold is not None
+        else float(threshold)
+    )
+    signal = "UP" if probability_up >= threshold_to_use else "DOWN"
 
     latest_date = history.index[-1]
     return Prediction(
@@ -69,6 +77,7 @@ def predict_next_day(
         probability_up=probability_up,
         probability_down=1 - probability_up,
         signal=signal,
-        threshold=threshold,
+        threshold=threshold_to_use,
+        threshold_source="recommended" if optimize_threshold else "manual",
         metrics=result.metrics,
     )

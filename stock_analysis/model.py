@@ -22,6 +22,10 @@ class Metrics:
     walk_forward_baseline_accuracy: float | None = None
     walk_forward_edge_vs_baseline: float | None = None
     walk_forward_test_rows: int = 0
+    recommended_threshold: float | None = None
+    recommended_threshold_basis: str | None = None
+    recommended_threshold_edge: float | None = None
+    recommended_threshold_balanced_accuracy: float | None = None
 
 
 @dataclass
@@ -90,6 +94,8 @@ def train_direction_model(
     test_size: float = 0.2,
     threshold: float = 0.5,
     compute_walk_forward_metrics: bool = False,
+    optimize_threshold: bool = False,
+    threshold_candidates: list[float] | None = None,
 ) -> TrainingResult:
     if not 0 < test_size < 0.5:
         raise ValueError("test_size must be greater than 0 and smaller than 0.5.")
@@ -110,24 +116,42 @@ def train_direction_model(
     y_train, y_test = y[:train_rows], y[train_rows:]
 
     evaluation_model = LogisticDirectionModel().fit(x_train, y_train)
-    predicted = evaluation_model.predict(x_test, threshold=threshold)
-    probabilities = evaluation_model.predict_proba(x_test)
-    holdout_metrics = _classification_metrics(y_test, predicted)
+    holdout_probabilities = evaluation_model.predict_proba(x_test)
 
     # Touch probabilities so static analyzers do not mistake this for an unused pipeline output.
-    if not np.isfinite(probabilities).all():
+    if not np.isfinite(holdout_probabilities).all():
         raise RuntimeError("Model produced non-finite probabilities.")
 
-    walk_forward_metrics = (
-        _walk_forward_validation(
+    walk_forward_probabilities: np.ndarray | None = None
+    walk_forward_actuals: np.ndarray | None = None
+    if compute_walk_forward_metrics or optimize_threshold:
+        walk_forward_actuals, walk_forward_probabilities = _walk_forward_probabilities(
             x=x,
             y=y,
             start_index=train_rows,
-            threshold=threshold,
         )
-        if compute_walk_forward_metrics
-        else None
-    )
+
+    recommendation = None
+    threshold_to_use = float(threshold)
+    if optimize_threshold:
+        recommendation = _recommend_threshold(
+            y_holdout=y_test,
+            holdout_probabilities=holdout_probabilities,
+            y_walk_forward=walk_forward_actuals,
+            walk_forward_probabilities=walk_forward_probabilities,
+            threshold_candidates=threshold_candidates,
+            default_threshold=threshold,
+        )
+        threshold_to_use = recommendation["threshold"]
+
+    holdout_predicted = (holdout_probabilities >= threshold_to_use).astype(int)
+    holdout_metrics = _classification_metrics(y_test, holdout_predicted)
+
+    walk_forward_metrics = None
+    if compute_walk_forward_metrics and walk_forward_actuals is not None and walk_forward_probabilities is not None:
+        walk_forward_predicted = (walk_forward_probabilities >= threshold_to_use).astype(int)
+        walk_forward_metrics = _classification_metrics(walk_forward_actuals, walk_forward_predicted)
+        walk_forward_metrics["rows"] = float(len(walk_forward_actuals))
 
     final_model = LogisticDirectionModel().fit(x, y)
 
@@ -154,6 +178,12 @@ def train_direction_model(
             if walk_forward_metrics is None
             else walk_forward_metrics["edge_vs_baseline"],
             walk_forward_test_rows=0 if walk_forward_metrics is None else int(walk_forward_metrics["rows"]),
+            recommended_threshold=None if recommendation is None else recommendation["threshold"],
+            recommended_threshold_basis=None if recommendation is None else recommendation["basis"],
+            recommended_threshold_edge=None if recommendation is None else recommendation["edge_vs_baseline"],
+            recommended_threshold_balanced_accuracy=None
+            if recommendation is None
+            else recommendation["balanced_accuracy"],
         ),
     )
 
@@ -190,24 +220,78 @@ def _classification_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str,
     }
 
 
-def _walk_forward_validation(
+def _walk_forward_probabilities(
     *,
     x: np.ndarray,
     y: np.ndarray,
     start_index: int,
-    threshold: float,
-) -> dict[str, float]:
-    predictions: list[int] = []
+) -> tuple[np.ndarray, np.ndarray]:
+    probabilities: list[float] = []
     actuals: list[float] = []
 
     for index in range(start_index, len(x)):
         model = LogisticDirectionModel().fit(x[:index], y[:index])
-        prediction = int(model.predict(x[index], threshold=threshold)[0])
-        predictions.append(prediction)
+        probability = float(model.predict_proba(x[index])[0])
+        probabilities.append(probability)
         actuals.append(float(y[index]))
 
-    y_true = np.asarray(actuals, dtype=float)
-    y_pred = np.asarray(predictions, dtype=int)
-    metrics = _classification_metrics(y_true, y_pred)
-    metrics["rows"] = float(len(y_true))
-    return metrics
+    return np.asarray(actuals, dtype=float), np.asarray(probabilities, dtype=float)
+
+
+def _recommend_threshold(
+    *,
+    y_holdout: np.ndarray,
+    holdout_probabilities: np.ndarray,
+    y_walk_forward: np.ndarray | None,
+    walk_forward_probabilities: np.ndarray | None,
+    threshold_candidates: list[float] | None,
+    default_threshold: float,
+) -> dict[str, float | str]:
+    candidates = _normalize_threshold_candidates(threshold_candidates, default_threshold)
+    basis = "walk_forward" if y_walk_forward is not None and walk_forward_probabilities is not None else "holdout"
+    best: dict[str, float | str] | None = None
+
+    for candidate in candidates:
+        if basis == "walk_forward":
+            predicted = (walk_forward_probabilities >= candidate).astype(int)
+            metrics = _classification_metrics(y_walk_forward, predicted)
+        else:
+            predicted = (holdout_probabilities >= candidate).astype(int)
+            metrics = _classification_metrics(y_holdout, predicted)
+
+        current = {
+            "threshold": float(candidate),
+            "basis": basis,
+            "accuracy": metrics["accuracy"],
+            "balanced_accuracy": metrics["balanced_accuracy"],
+            "edge_vs_baseline": metrics["edge_vs_baseline"],
+        }
+        if best is None or _recommendation_key(current) > _recommendation_key(best):
+            best = current
+
+    assert best is not None
+    return best
+
+
+def _normalize_threshold_candidates(
+    threshold_candidates: list[float] | None,
+    default_threshold: float,
+) -> list[float]:
+    if threshold_candidates:
+        values = threshold_candidates
+    else:
+        values = [0.40, 0.45, 0.50, 0.55, 0.60]
+
+    values = [float(value) for value in values if 0.05 <= float(value) <= 0.95]
+    values.append(float(default_threshold))
+    return sorted({round(value, 4) for value in values})
+
+
+def _recommendation_key(payload: dict[str, float | str]) -> tuple[float, float, float, float]:
+    threshold = float(payload["threshold"])
+    return (
+        float(payload["edge_vs_baseline"]),
+        float(payload["balanced_accuracy"]),
+        float(payload["accuracy"]),
+        -abs(threshold - 0.5),
+    )

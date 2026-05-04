@@ -154,11 +154,17 @@ def render_single_prediction() -> None:
             0.05,
             help="상승 확률이 이 값 이상이면 '상승 우세'로 표시합니다. 0.50은 기본값, 0.55~0.60은 더 보수적인 기준입니다.",
         )
+        auto_threshold = st.checkbox(
+            "종목별 기준 자동 추천",
+            value=True,
+            help="이 종목의 최근 검증 구간에서 더 안정적이었던 threshold 후보를 무료로 자동 탐색해 적용합니다.",
+        )
         with st.expander("입력값 설명", expanded=False):
             st.markdown(
                 "- `조회기간`: 모델이 참고하는 과거 데이터 길이입니다.\n"
                 "- `상승 판단 기준`: 상승 확률을 어디서부터 상승으로 볼지 정합니다.\n"
-                "- 처음엔 `5y`와 `0.50`으로 두고 보는 것이 가장 무난합니다."
+                "- `종목별 기준 자동 추천`을 켜면 0.40~0.60 사이 후보 중 이 종목에 더 맞는 기준을 자동 적용합니다.\n"
+                "- 처음엔 `5y`와 자동 추천 켜짐 상태로 보는 것이 가장 무난합니다."
             )
         run = st.button("예측 실행", type="primary", use_container_width=True)
 
@@ -171,6 +177,7 @@ def render_single_prediction() -> None:
                     period=period,
                     threshold=threshold,
                     compute_walk_forward_metrics=True,
+                    optimize_threshold=auto_threshold,
                 )
             render_prediction_card(prediction)
         else:
@@ -854,6 +861,12 @@ def render_prediction_card(prediction: Prediction) -> None:
 
     st.subheader(f"{prediction.ticker} 예측 결과")
     st.caption(f"기준 거래일: {prediction.latest_date}")
+    if prediction.threshold_source == "recommended" and metrics.recommended_threshold is not None:
+        basis_label = "walk-forward" if metrics.recommended_threshold_basis == "walk_forward" else "holdout"
+        st.caption(
+            f"자동 추천 기준 적용: `{prediction.threshold:.2f}` "
+            f"(평가 기준: {basis_label}, 개선폭: {metrics.recommended_threshold_edge or 0.0:+.2%}p)"
+        )
 
     if strength_label == "매우 애매":
         st.info(
@@ -939,6 +952,10 @@ def render_prediction_card(prediction: Prediction) -> None:
             detail_row["Walk-forward 단순 기준"] = round(metrics.walk_forward_baseline_accuracy or 0.0, 4)
             detail_row["Walk-forward 개선폭"] = round(metrics.walk_forward_edge_vs_baseline or 0.0, 4)
             detail_row["Walk-forward 검증 수"] = metrics.walk_forward_test_rows
+        if metrics.recommended_threshold is not None:
+            detail_row["자동 추천 기준"] = round(metrics.recommended_threshold, 4)
+            detail_row["추천 기준 개선폭"] = round(metrics.recommended_threshold_edge or 0.0, 4)
+            detail_row["추천 기준 균형 정확도"] = round(metrics.recommended_threshold_balanced_accuracy or 0.0, 4)
 
         detail_frame = pd.DataFrame([detail_row])
         st.dataframe(detail_frame, use_container_width=True, hide_index=True)
@@ -999,6 +1016,14 @@ def render_prediction_card(prediction: Prediction) -> None:
                     {
                         "지표": "Walk-forward 검증 수",
                         "의미": "하루씩 전진하며 실제로 평가한 예측 횟수입니다.",
+                    },
+                    {
+                        "지표": "자동 추천 기준",
+                        "의미": "0.40~0.60 후보 중 최근 검증 성능이 가장 안정적이었던 threshold 값입니다.",
+                    },
+                    {
+                        "지표": "추천 기준 개선폭",
+                        "의미": "자동 추천 기준을 적용했을 때 단순 기준보다 얼마나 나은지 보여줍니다.",
                     },
                 ]
             )
