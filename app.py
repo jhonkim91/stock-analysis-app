@@ -235,25 +235,7 @@ def render_dashboard_fear_greed() -> None:
     current = data.summary.iloc[0]
     score = float(current["score"])
     status = str(current["status"])
-    accent_color, badge_bg, badge_fg = fear_greed_palette(score)
-
-    with st.container(border=True):
-        st.markdown(
-            (
-                "<div style='display:flex; justify-content:space-between; align-items:flex-start; gap:12px;'>"
-                "<div>"
-                "<div style='font-size:0.9rem; color:#6b7280; margin-bottom:0.35rem;'>한국 공포탐욕지수</div>"
-                f"<div style='font-size:2.2rem; font-weight:800; color:{accent_color}; line-height:1;'>{score:.1f}</div>"
-                f"<div style='margin-top:0.5rem; display:inline-block; padding:0.28rem 0.7rem; border-radius:999px; "
-                f"background:{badge_bg}; color:{badge_fg}; font-size:0.86rem; font-weight:700;'>{status}</div>"
-                "</div>"
-                f"<div style='font-size:0.82rem; color:#6b7280; text-align:right;'>기준일<br><strong style=\"color:#111827;\">{data.latest_date}</strong></div>"
-                "</div>"
-            ),
-            unsafe_allow_html=True,
-        )
-        st.progress(max(0, min(100, int(round(score)))))
-        st.caption("0-24 극단적 공포 · 25-44 공포 · 45-54 중립 · 55-74 탐욕 · 75-100 극단적 탐욕")
+    st.markdown(build_fear_greed_dashboard_card(data), unsafe_allow_html=True)
 
     compact_summary = data.summary.copy()
     compact_summary = compact_summary.rename(
@@ -281,6 +263,87 @@ def fear_greed_palette(score: float) -> tuple[str, str, str]:
     if score <= 74:
         return ("#16a34a", "#dcfce7", "#166534")
     return ("#059669", "#d1fae5", "#065f46")
+
+
+def build_fear_greed_dashboard_card(data) -> str:
+    current = data.summary.iloc[0]
+    score = float(current["score"])
+    status = str(current["status"])
+    accent_color, badge_bg, badge_fg = fear_greed_palette(score)
+    gauge_html = build_fear_greed_gauge(score=score, status=status, accent_color=accent_color)
+    factors_html = build_fear_greed_factor_rows(data.factors)
+
+    return (
+        "<div style='border:1px solid #e5e7eb; background:#f8fafc; border-radius:16px; padding:18px 18px 16px 18px;'>"
+        "<div style='display:flex; justify-content:space-between; align-items:flex-start; gap:12px; margin-bottom:10px;'>"
+        "<div>"
+        "<div style='font-size:0.78rem; letter-spacing:0.18em; text-transform:uppercase; color:#64748b; margin-bottom:0.35rem;'>한국 시장</div>"
+        "<div style='font-size:1.55rem; font-weight:800; color:#0f172a;'>KOSPI · KOSDAQ</div>"
+        "</div>"
+        f"<div style='text-align:right; font-size:0.8rem; color:#64748b;'>기준일<br><strong style=\"font-size:0.96rem; color:#0f172a;\">{data.latest_date}</strong></div>"
+        "</div>"
+        f"{gauge_html}"
+        "<div style='height:1px; background:#e2e8f0; margin:14px 0 12px 0;'></div>"
+        f"{factors_html}"
+        "<div style='margin-top:12px; display:flex; align-items:center; justify-content:space-between; gap:12px;'>"
+        f"<span style='display:inline-block; padding:0.28rem 0.7rem; border-radius:999px; background:{badge_bg}; color:{badge_fg}; font-size:0.84rem; font-weight:700;'>{status}</span>"
+        "<span style='font-size:0.76rem; color:#64748b;'>0-24 극단적 공포 · 25-44 공포 · 45-54 중립 · 55-74 탐욕 · 75-100 극단적 탐욕</span>"
+        "</div>"
+        "</div>"
+    )
+
+
+def build_fear_greed_gauge(*, score: float, status: str, accent_color: str) -> str:
+    progress = max(0.0, min(100.0, float(score)))
+    return (
+        "<div style='display:flex; justify-content:center; padding:4px 0 6px 0;'>"
+        "<svg width='100%' viewBox='0 0 280 170' style='max-width:420px;'>"
+        "<path d='M 40 140 A 100 100 0 0 1 240 140' fill='none' stroke='#dbe4f0' stroke-width='16' stroke-linecap='round' pathLength='100'/>"
+        f"<path d='M 40 140 A 100 100 0 0 1 240 140' fill='none' stroke='{accent_color}' stroke-width='16' stroke-linecap='round' pathLength='100' stroke-dasharray='{progress} 100'/>"
+        "<text x='32' y='148' font-size='12' fill='#64748b'>0</text>"
+        "<text x='84' y='62' font-size='12' fill='#64748b'>25</text>"
+        "<text x='136' y='42' font-size='12' fill='#64748b'>50</text>"
+        "<text x='188' y='62' font-size='12' fill='#64748b'>75</text>"
+        "<text x='232' y='148' font-size='12' fill='#64748b'>100</text>"
+        f"<text x='140' y='110' text-anchor='middle' font-size='40' font-weight='800' fill='{accent_color}'>{int(round(score))}</text>"
+        f"<text x='140' y='132' text-anchor='middle' font-size='16' font-weight='700' fill='{accent_color}'>{status}</text>"
+        "</svg>"
+        "</div>"
+    )
+
+
+def build_fear_greed_factor_rows(factors: pd.DataFrame) -> str:
+    if factors.empty:
+        return "<div style='font-size:0.9rem; color:#64748b;'>구성 지표를 불러오지 못했습니다.</div>"
+
+    bar_colors = ["#22c5f3", "#f97316", "#22c55e", "#f97316", "#ef4444", "#22c5f3", "#3b82f6"]
+    rows: list[str] = []
+    for index, (_, row) in enumerate(factors.head(7).iterrows()):
+        color = bar_colors[index % len(bar_colors)]
+        factor_name = str(row.get("factor") or row.get("factor_key") or "-")
+        score = max(0.0, min(100.0, float(row.get("score_0_100") or 0.0)))
+        raw_value = row.get("raw")
+        unit = str(row.get("unit") or "")
+        if pd.notna(raw_value):
+            try:
+                numeric_raw = float(raw_value)
+                value_label = f"{numeric_raw:+.2f}{unit}" if unit else f"{numeric_raw:.0f}"
+            except (TypeError, ValueError):
+                value_label = str(raw_value)
+        else:
+            value_label = f"{score:.0f}"
+
+        rows.append(
+            "<div style='display:grid; grid-template-columns:96px 1fr auto; gap:10px; align-items:center; margin:0 0 10px 0;'>"
+            f"<div style='font-size:0.86rem; color:#475569; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;'>{factor_name}</div>"
+            "<div style='height:8px; border-radius:999px; background:#dbe4f0; overflow:hidden;'>"
+            f"<div style='width:{score:.0f}%; height:100%; border-radius:999px; background:{color};'></div>"
+            "</div>"
+            f"<div style='font-size:0.84rem; font-weight:700; color:{color}; min-width:58px; text-align:right;'>{value_label}</div>"
+            "</div>"
+        )
+
+    return "".join(rows)
 
 
 def render_sidebar() -> None:
