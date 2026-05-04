@@ -79,7 +79,7 @@ def _is_hard_symbol(value: str) -> bool:
     upper = value.upper()
     if re.fullmatch(r"\d{6}", upper):
         return True
-    if re.fullmatch(r"\d{6}\.(KS|KQ)", upper):
+    if re.fullmatch(r"[0-9A-Z]{6}\.(KS|KQ)", upper):
         return True
     if re.fullmatch(r"[A-Z][A-Z0-9.\-]{0,14}", upper) and ("." in upper or "-" in upper or any(char.isdigit() for char in upper)):
         return True
@@ -234,7 +234,8 @@ def _load_korean_name_index_from_krx() -> tuple[StockMatch, ...]:
             continue
 
         name, market_label, ticker = columns[0], columns[1], columns[2]
-        if not re.fullmatch(r"\d{6}", ticker):
+        ticker = ticker.upper()
+        if not re.fullmatch(r"[0-9A-Z]{6}", ticker):
             continue
 
         normalized_market = _normalize_text(market_label)

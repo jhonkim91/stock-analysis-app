@@ -33,7 +33,23 @@ def normalize_ticker(ticker: str, exchange: str | None = None) -> str:
             raise ValueError(f"Unsupported exchange '{exchange}'. Use one of: {allowed}.")
         return f"{value}{suffix}"
 
-    if re.fullmatch(r"\d{6}\.(KS|KQ)", value):
+    if re.fullmatch(r"[0-9A-Z]{6}", value) and any(char.isalpha() for char in value):
+        if exchange:
+            suffix_map = {
+                "KRX": ".KS",
+                "KS": ".KS",
+                "KOSPI": ".KS",
+                "KQ": ".KQ",
+                "KOSDAQ": ".KQ",
+            }
+            suffix = suffix_map.get(exchange.upper())
+            if suffix is None:
+                allowed = ", ".join(suffix_map)
+                raise ValueError(f"Unsupported exchange '{exchange}'. Use one of: {allowed}.")
+            return f"{value}{suffix}"
+        return resolve_stock_input(original, exchange_hint=exchange)
+
+    if re.fullmatch(r"[0-9A-Z]{6}\.(KS|KQ)", value):
         return value
 
     if re.fullmatch(r"[A-Z][A-Z0-9.\-]{0,14}", value):
