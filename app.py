@@ -124,12 +124,42 @@ def render_sidebar() -> None:
 def render_single_prediction() -> None:
     left, right = st.columns([0.35, 0.65], gap="large")
     with left:
-        ticker = st.text_input("종목코드/이름", value="005930", key="single_pred_ticker")
+        ticker = st.text_input(
+            "종목코드/이름",
+            value="005930",
+            key="single_pred_ticker",
+            help="한국 종목코드(예: 005930), 한국 종목명(예: 삼성전자), 미국 티커(예: AAPL), 미국 종목명(예: Apple)을 입력할 수 있습니다.",
+        )
         st.caption("예: 005930, 삼성전자, AAPL, Apple")
-        exchange = st.selectbox("거래소", ["", "KS", "KQ", "KOSPI", "KOSDAQ"], index=1, key="single_pred_exchange")
+        exchange = st.selectbox(
+            "거래소",
+            ["", "KS", "KQ", "KOSPI", "KOSDAQ"],
+            index=1,
+            key="single_pred_exchange",
+            help="한국 6자리 코드만 입력했을 때 어느 시장으로 해석할지 정합니다. 미국 종목은 비워둬도 됩니다.",
+        )
         render_stock_candidates(ticker, exchange, key_prefix="single_pred")
-        period = st.selectbox("조회기간", ["2y", "5y", "10y"], index=1, key="single_pred_period")
-        threshold = st.slider("상승 판단 기준", 0.1, 0.9, 0.5, 0.05)
+        period = st.selectbox(
+            "조회기간",
+            ["2y", "5y", "10y"],
+            index=1,
+            key="single_pred_period",
+            help="모델이 학습할 과거 데이터 길이입니다. 보통 5년이 가장 무난하고, 2년은 최근 흐름에 더 민감합니다.",
+        )
+        threshold = st.slider(
+            "상승 판단 기준",
+            0.1,
+            0.9,
+            0.5,
+            0.05,
+            help="상승 확률이 이 값 이상이면 '상승 우세'로 표시합니다. 0.50은 기본값, 0.55~0.60은 더 보수적인 기준입니다.",
+        )
+        with st.expander("입력값 설명", expanded=False):
+            st.markdown(
+                "- `조회기간`: 모델이 참고하는 과거 데이터 길이입니다.\n"
+                "- `상승 판단 기준`: 상승 확률을 어디서부터 상승으로 볼지 정합니다.\n"
+                "- 처음엔 `5y`와 `0.50`으로 두고 보는 것이 가장 무난합니다."
+            )
         run = st.button("예측 실행", type="primary", use_container_width=True)
 
     with right:
@@ -800,67 +830,111 @@ def render_stock_candidates(query: str, exchange: str, *, key_prefix: str) -> No
     )
 
 
-def render_stock_candidates(query: str, exchange: str, *, key_prefix: str) -> None:
-    value = query.strip()
-    if not value:
-        return
-    if len(value) < 2:
-        st.caption("종목코드 또는 종목명을 입력하세요.")
-        return
-
-    try:
-        candidates = load_stock_candidates(value, exchange or "")
-    except Exception as exc:
-        st.caption(f"검색 후보를 가져오지 못했습니다: {exc}")
-        return
-
-    if not candidates:
-        st.caption("검색 후보가 없습니다.")
-        return
-
-    preview = pd.DataFrame(
-        [
-            {
-                "종목명": item["name"],
-                "심볼": item["symbol"],
-                "거래소": item["exchange"],
-                "출처": item["source"],
-            }
-            for item in candidates[:5]
-        ]
-    )
-    st.dataframe(
-        preview,
-        use_container_width=True,
-        hide_index=True,
-    )
+def describe_prediction_strength(probability_up: float) -> tuple[str, str]:
+    edge = abs(probability_up - 0.5)
+    if edge < 0.03:
+        return ("매우 애매", "상승과 하락 확률이 거의 비슷합니다.")
+    if edge < 0.07:
+        return ("약함", "방향은 있지만 확신은 크지 않습니다.")
+    if edge < 0.15:
+        return ("보통", "한쪽 가능성을 조금 더 높게 보고 있습니다.")
+    if edge < 0.25:
+        return ("높음", "한쪽 가능성을 비교적 분명하게 보고 있습니다.")
+    return ("매우 높음", "모델이 한쪽 방향을 강하게 보고 있습니다.")
 
 
 def render_prediction_card(prediction: Prediction) -> None:
     metrics = prediction.metrics
-    st.subheader(f"{prediction.ticker}")
+    signal_is_up = prediction.signal == "UP"
+    signal_label = "상승 우세" if signal_is_up else "하락 우세"
+    strength_label, strength_detail = describe_prediction_strength(prediction.probability_up)
+    leading_probability = prediction.probability_up if signal_is_up else prediction.probability_down
+    confidence_gap = abs(prediction.probability_up - prediction.probability_down)
+
+    st.subheader(f"{prediction.ticker} 예측 결과")
+    st.caption(f"기준 거래일: {prediction.latest_date}")
+
+    if strength_label == "매우 애매":
+        st.info(
+            f"현재 모델은 `{signal_label}`로 보고 있지만, 확률 차이가 작아서 방향성이 뚜렷하지 않습니다."
+        )
+    elif signal_is_up:
+        st.success(
+            f"현재 모델은 다음 거래일에 `{signal_label}`로 보고 있습니다. "
+            f"가장 높은 쪽 확률은 {leading_probability:.1%}입니다."
+        )
+    else:
+        st.warning(
+            f"현재 모델은 다음 거래일에 `{signal_label}`로 보고 있습니다. "
+            f"가장 높은 쪽 확률은 {leading_probability:.1%}입니다."
+        )
+
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("최근 종가", f"{prediction.latest_close:,.2f}")
-    c2.metric("상승 확률", f"{prediction.probability_up:.2%}")
-    c3.metric("예측", "상승" if prediction.signal == "UP" else "하락")
-    c4.metric("검증 정확도", f"{metrics.accuracy:.2%}")
-    st.dataframe(
-        pd.DataFrame(
+    c1.metric(
+        "현재 판단",
+        signal_label,
+        help=f"상승 확률이 사용자가 정한 판단 기준 {prediction.threshold:.2f} 이상이면 상승 우세, 아니면 하락 우세로 표시합니다.",
+    )
+    c2.metric(
+        "상승 가능성",
+        f"{prediction.probability_up:.1%}",
+        help="다음 거래일 종가가 오늘 종가보다 높을 가능성을 모델이 추정한 값입니다.",
+    )
+    c3.metric(
+        "하락 가능성",
+        f"{prediction.probability_down:.1%}",
+        help="다음 거래일 종가가 오늘 종가보다 낮거나 비슷한 쪽으로 갈 가능성을 단순 보완적으로 보여줍니다.",
+    )
+    c4.metric(
+        "판단 강도",
+        strength_label,
+        help="상승/하락 확률이 50%에서 얼마나 멀리 떨어져 있는지를 쉽게 해석한 값입니다.",
+    )
+
+    st.progress(int(round(leading_probability * 100)))
+    st.caption(
+        f"{strength_detail} 최근 종가는 {prediction.latest_close:,.2f}이고, "
+        f"상승/하락 확률 차이는 {confidence_gap:.1%}p 입니다."
+    )
+
+    with st.expander("이 결과를 어떻게 읽나요?", expanded=False):
+        st.markdown(
+            "- `상승 가능성`이 50%에 가까우면 방향성이 약합니다.\n"
+            "- `상승 판단 기준`을 0.55로 올리면 더 보수적으로 상승 신호를 보게 됩니다.\n"
+            "- 이 값은 다음 날 방향 확률이지, 상승폭이나 수익률 크기를 뜻하는 값은 아닙니다."
+        )
+
+    summary_frame = pd.DataFrame(
+        [
+            {"항목": "한줄 해석", "값": f"{prediction.ticker}은(는) 현재 {signal_label} 신호입니다."},
+            {"항목": "확률 해석", "값": f"상승 {prediction.probability_up:.1%} / 하락 {prediction.probability_down:.1%}"},
+            {"항목": "초보자 체크", "값": "50%에 가까울수록 애매하고, 50%에서 멀수록 방향성이 더 뚜렷합니다."},
+        ]
+    )
+    st.dataframe(summary_frame, use_container_width=True, hide_index=True)
+
+    with st.expander("자세한 모델 수치 보기", expanded=False):
+        if metrics.accuracy < metrics.baseline_accuracy:
+            st.warning(
+                "이 종목에서는 모델 검증 정확도가 단순 기준보다 낮았습니다. "
+                "예측은 참고용으로만 보는 편이 좋습니다."
+            )
+
+        detail_frame = pd.DataFrame(
             [
                 {
                     "최근 거래일": prediction.latest_date,
-                    "하락 확률": prediction.probability_down,
-                    "단순 기준 정확도": metrics.baseline_accuracy,
-                    "상승 precision": metrics.precision_up,
-                    "상승 recall": metrics.recall_up,
-                    "학습 행": metrics.train_rows,
-                    "검증 행": metrics.test_rows,
+                    "최근 종가": round(prediction.latest_close, 6),
+                    "모델 검증 정확도": round(metrics.accuracy, 4),
+                    "단순 기준 정확도": round(metrics.baseline_accuracy, 4),
+                    "상승 precision": round(metrics.precision_up, 4),
+                    "상승 recall": round(metrics.recall_up, 4),
+                    "학습 데이터 수": metrics.train_rows,
+                    "검증 데이터 수": metrics.test_rows,
                 }
             ]
-        ),
-        use_container_width=True,
-        hide_index=True,
-    )
+        )
+        st.dataframe(detail_frame, use_container_width=True, hide_index=True)
 
 
 def render_valuation_card(result: ValuationResult) -> None:
