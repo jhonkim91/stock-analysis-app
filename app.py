@@ -108,7 +108,7 @@ def render_dashboard() -> None:
         if top_frame.empty:
             st.info("아직 저장된 상승확률 결과가 없습니다. `3. 상승확률 Top`을 한 번 실행하면 여기서 바로 볼 수 있습니다.")
         else:
-            st.dataframe(top_frame, use_container_width=True, hide_index=True)
+            render_dashboard_top_cards(top_frame)
 
         st.markdown("**등록된 관심종목**")
         watchlist_frame = load_dashboard_watchlist(user_id)
@@ -150,11 +150,7 @@ def load_dashboard_top_probability(user_id: str) -> pd.DataFrame:
     if not display_columns:
         return normalized.head(5)
 
-    result = normalized.loc[:, display_columns].head(5).copy()
-    result["상승확률"] = result["상승확률"].map(lambda value: f"{value:.1%}" if pd.notna(value) else "-")
-    if "종가" in result.columns:
-        result["종가"] = result["종가"].map(lambda value: f"{value:,.0f}" if pd.notna(value) else "-")
-    return result
+    return normalized.loc[:, display_columns].head(5).copy()
 
 
 def load_dashboard_watchlist(user_id: str) -> pd.DataFrame:
@@ -173,6 +169,33 @@ def load_dashboard_watchlist(user_id: str) -> pd.DataFrame:
         ]
     )
     return frame
+
+
+def render_dashboard_top_cards(frame: pd.DataFrame) -> None:
+    rows = frame.reset_index(drop=True).to_dict(orient="records")
+    for start in range(0, len(rows), 2):
+        columns = st.columns(2, gap="medium")
+        for column, row in zip(columns, rows[start : start + 2]):
+            with column:
+                render_dashboard_top_card(row)
+
+
+def render_dashboard_top_card(row: dict[str, Any]) -> None:
+    name = str(row.get("종목명") or row.get("종목코드") or "-")
+    ticker = str(row.get("종목코드") or "-")
+    probability_raw = pd.to_numeric(row.get("상승확률"), errors="coerce")
+    probability_label = f"{probability_raw:.1%}" if pd.notna(probability_raw) else "-"
+    signal = str(row.get("판단") or "-")
+    close_raw = pd.to_numeric(row.get("종가"), errors="coerce")
+    close_label = f"{close_raw:,.0f}" if pd.notna(close_raw) else "-"
+
+    with st.container(border=True):
+        st.caption(ticker)
+        st.markdown(f"**{name}**")
+        metric_left, metric_right = st.columns(2)
+        metric_left.metric("상승확률", probability_label)
+        metric_right.metric("판단", signal)
+        st.caption(f"최근 종가 {close_label}")
 
 
 def render_dashboard_fear_greed() -> None:
