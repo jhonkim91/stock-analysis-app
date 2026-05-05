@@ -27,6 +27,9 @@ def main(argv: list[str] | None = None) -> int:
             sleep_seconds=args.sleep,
             retries=args.retries,
             fail_fast=args.fail_fast,
+            min_price=args.min_price,
+            min_accuracy_edge=args.min_accuracy_edge,
+            max_per_market=args.max_per_market,
             progress=None if args.quiet else print_progress,
         )
     except Exception as exc:
@@ -57,6 +60,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--sleep", type=float, default=0.0, help="종목 사이 대기 시간(초)입니다.")
     parser.add_argument("--retries", type=int, default=1, help="종목별 실패 시 재시도 횟수입니다.")
     parser.add_argument("--fail-fast", action="store_true", help="실패가 발생하면 즉시 중단합니다.")
+    parser.add_argument("--min-price", type=float, help="이 값보다 낮은 종목은 Top 후보에서 제외합니다.")
+    parser.add_argument("--min-accuracy-edge", type=float, help="검증 정확도가 단순 기준보다 이 값 이상 높을 때만 Top 후보로 선택합니다.")
+    parser.add_argument("--max-per-market", type=int, help="KOSPI/KOSDAQ 시장별로 선택할 최대 후보 수입니다.")
     parser.add_argument("--quiet", action="store_true", help="종목별 진행 상황을 출력하지 않습니다.")
     parser.add_argument("--no-table", action="store_true", help="완료 후 Top 표를 출력하지 않습니다.")
     return parser

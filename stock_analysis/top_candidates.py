@@ -49,6 +49,9 @@ def run_top_market_cap_screen(
     sleep_seconds: float = 0.0,
     retries: int = 1,
     fail_fast: bool = False,
+    min_price: float | None = None,
+    min_accuracy_edge: float | None = None,
+    max_per_market: int | None = None,
     progress=None,
 ) -> TopCandidateSummary:
     if top <= 0:
@@ -95,6 +98,9 @@ def run_top_market_cap_screen(
             "source": source,
             "date": date,
             "exclude_preferred": exclude_preferred,
+            "min_price": min_price,
+            "min_accuracy_edge": min_accuracy_edge,
+            "max_per_market": max_per_market,
         },
     )
 
@@ -102,11 +108,13 @@ def run_top_market_cap_screen(
     enriched_rows = _merge_market_cap_metadata(prediction_rows, universe)
     _write_csv(Path(auto_summary.csv_path), enriched_rows)
 
-    top_rows = [
-        row
-        for row in enriched_rows
-        if row.get("status") == "success" and row.get("probability_up") not in {"", None}
-    ][:top]
+    top_rows = _select_top_rows(
+        enriched_rows,
+        top=top,
+        min_price=min_price,
+        min_accuracy_edge=min_accuracy_edge,
+        max_per_market=max_per_market,
+    )
     for selection_rank, row in enumerate(top_rows, start=1):
         row["selection_rank"] = selection_rank
 
@@ -159,6 +167,8 @@ def _merge_market_cap_metadata(
         item = metadata.get(key)
         merged: dict[str, Any] = dict(row)
         if item:
+            accuracy = _safe_float(row.get("accuracy"))
+            baseline_accuracy = _safe_float(row.get("baseline_accuracy"))
             merged.update(
                 {
                     "market_cap_rank": item.rank,
@@ -166,6 +176,10 @@ def _merge_market_cap_metadata(
                     "market_cap": item.market_cap,
                     "market_cap_source": item.source,
                     "market_cap_source_date": item.source_date,
+                    "screen_price": item.price or "",
+                    "accuracy_edge": ""
+                    if accuracy is None or baseline_accuracy is None
+                    else round(accuracy - baseline_accuracy, 6),
                 }
             )
         else:
@@ -176,11 +190,54 @@ def _merge_market_cap_metadata(
                     "market_cap": "",
                     "market_cap_source": "",
                     "market_cap_source_date": "",
+                    "screen_price": "",
+                    "accuracy_edge": "",
                 }
             )
         enriched.append(merged)
 
     return enriched
+
+
+def _select_top_rows(
+    rows: list[dict[str, Any]],
+    *,
+    top: int,
+    min_price: float | None,
+    min_accuracy_edge: float | None,
+    max_per_market: int | None,
+) -> list[dict[str, Any]]:
+    filtered: list[dict[str, Any]] = []
+    for row in rows:
+        if row.get("status") != "success" or row.get("probability_up") in {"", None}:
+            continue
+        price = _safe_float(row.get("screen_price")) or _safe_float(row.get("latest_close"))
+        accuracy_edge = _safe_float(row.get("accuracy_edge"))
+        if min_price is not None and price is not None and price < min_price:
+            continue
+        if min_accuracy_edge is not None and accuracy_edge is not None and accuracy_edge < min_accuracy_edge:
+            continue
+        filtered.append(row)
+
+    filtered.sort(
+        key=lambda row: (
+            -(_safe_float(row.get("probability_up")) or 0.0),
+            -(_safe_float(row.get("accuracy_edge")) or -999.0),
+            -(_safe_float(row.get("market_cap")) or 0.0),
+        )
+    )
+
+    selected: list[dict[str, Any]] = []
+    market_counts: dict[str, int] = {}
+    for row in filtered:
+        market = str(row.get("market") or "UNKNOWN")
+        if max_per_market is not None and market_counts.get(market, 0) >= max_per_market:
+            continue
+        selected.append(row)
+        market_counts[market] = market_counts.get(market, 0) + 1
+        if len(selected) >= top:
+            break
+    return selected
 
 
 def _rewrite_prediction_json(summary: AutoRunSummary, rows: list[dict[str, Any]]) -> None:
@@ -214,6 +271,7 @@ def _fieldnames(rows: list[dict[str, Any]]) -> list[str]:
         "market_cap_rank",
         "market",
         "market_cap",
+        "screen_price",
         "market_cap_source",
         "market_cap_source_date",
         "run_at",
@@ -228,6 +286,7 @@ def _fieldnames(rows: list[dict[str, Any]]) -> list[str]:
         "probability_up",
         "probability_down",
         "accuracy",
+        "accuracy_edge",
         "baseline_accuracy",
         "precision_up",
         "recall_up",
@@ -248,3 +307,12 @@ def _fieldnames(rows: list[dict[str, Any]]) -> list[str]:
                 names.append(name)
                 seen.add(name)
     return names
+
+
+def _safe_float(value: Any) -> float | None:
+    if value in {"", None}:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None

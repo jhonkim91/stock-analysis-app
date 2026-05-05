@@ -735,6 +735,38 @@ def render_top_probability() -> None:
         market = st.selectbox("시장", ["ALL", "KOSPI", "KOSDAQ"], key="prob_market")
         exclude_preferred = st.checkbox("우선주 제외", value=True, key="prob_exclude_pref")
         period = st.selectbox("조회기간", ["2y", "5y", "10y"], index=1, key="prob_period")
+        with st.expander("추가 필터", expanded=True):
+            min_price_enabled = st.checkbox("최소 주가 필터", value=True, key="prob_min_price_enabled")
+            min_price = st.number_input(
+                "최소 주가",
+                min_value=0,
+                max_value=500000,
+                value=5000,
+                step=1000,
+                disabled=not min_price_enabled,
+                key="prob_min_price",
+            )
+            min_edge_enabled = st.checkbox("최소 검증 개선폭 필터", value=True, key="prob_min_edge_enabled")
+            min_accuracy_edge = st.number_input(
+                "최소 개선폭",
+                min_value=-0.20,
+                max_value=0.20,
+                value=0.00,
+                step=0.01,
+                format="%.2f",
+                disabled=not min_edge_enabled,
+                key="prob_min_edge",
+            )
+            market_cap_enabled = st.checkbox("시장별 최대 선택 수 제한", value=False, key="prob_market_cap_enabled")
+            max_per_market = st.number_input(
+                "시장별 최대 수",
+                min_value=1,
+                max_value=10,
+                value=5,
+                step=1,
+                disabled=not market_cap_enabled,
+                key="prob_max_per_market",
+            )
         run = st.button("상승확률 Top 실행", type="primary", use_container_width=True)
 
     with right:
@@ -757,6 +789,9 @@ def render_top_probability() -> None:
                     period=period,
                     sleep_seconds=float(st.session_state.sleep_seconds),
                     retries=int(st.session_state.retries),
+                    min_price=float(min_price) if min_price_enabled else None,
+                    min_accuracy_edge=float(min_accuracy_edge) if min_edge_enabled else None,
+                    max_per_market=int(max_per_market) if market_cap_enabled else None,
                     progress=on_progress,
                 )
             persist_run_snapshot_if_possible(
