@@ -1348,6 +1348,76 @@ def render_prediction_backtest(prediction: Prediction) -> None:
         st.dataframe(recent_frame, use_container_width=True, hide_index=True)
 
 
+def interpret_prediction_action(prediction: Prediction) -> tuple[str, str, str, list[str]]:
+    metrics = prediction.metrics
+    probability_up = float(prediction.probability_up)
+    probability_down = float(prediction.probability_down)
+    confidence_gap = abs(probability_up - probability_down)
+    validation_edge = (
+        float(metrics.walk_forward_edge_vs_baseline)
+        if metrics.walk_forward_edge_vs_baseline is not None
+        else float(metrics.edge_vs_baseline)
+    )
+    hit_rate = prediction.backtest.summary.hit_rate if prediction.backtest is not None else None
+
+    reasons = [
+        f"상승확률 {probability_up:.1%}, 하락확률 {probability_down:.1%}",
+        f"판단 기준선 {prediction.threshold:.2f}, 방향 차이 {confidence_gap:.1%}p",
+    ]
+    if metrics.walk_forward_accuracy is not None:
+        reasons.append(
+            f"최근 walk-forward 개선폭 {float(metrics.walk_forward_edge_vs_baseline or 0.0):+.2%}p"
+        )
+    if hit_rate is not None:
+        reasons.append(f"최근 상승 신호 적중률 {hit_rate:.1%}")
+
+    if prediction.signal == "DOWN":
+        if confidence_gap < 0.06:
+            return (
+                "관망",
+                "info",
+                "모델은 하락 쪽으로 보지만 확신은 크지 않습니다. 지금은 방향 확인용으로만 보는 편이 좋습니다.",
+                reasons,
+            )
+        return (
+            "보수적 관망",
+            "warning",
+            "하락 우세 신호가 더 강합니다. 신규 진입보다 추세 확인 쪽에 무게를 두는 해석이 더 자연스럽습니다.",
+            reasons,
+        )
+
+    if validation_edge < 0:
+        return (
+            "참고용 신호",
+            "warning",
+            "상승 신호는 나왔지만 최근 검증 성적이 단순 기준보다 약합니다. 바로 의사결정에 쓰기보다 참고용으로 보는 편이 안전합니다.",
+            reasons,
+        )
+
+    if probability_up >= 0.65 and confidence_gap >= 0.15 and (hit_rate is None or hit_rate >= 0.55):
+        return (
+            "강한 관심 후보",
+            "success",
+            "상승 우세가 비교적 뚜렷하고 최근 검증 흐름도 나쁘지 않습니다. 우선 점검할 후보로 보기 좋습니다.",
+            reasons,
+        )
+
+    if probability_up >= 0.57 and confidence_gap >= 0.08:
+        return (
+            "관심 후보",
+            "success",
+            "상승 쪽으로 기울어 있지만 아주 강한 확신 단계는 아닙니다. 거래량, 뉴스, 시장 분위기를 함께 보는 해석이 좋습니다.",
+            reasons,
+        )
+
+    return (
+        "약한 관심",
+        "info",
+        "상승 쪽으로 조금 기울었지만 아직은 애매합니다. 섣불리 확신하기보다 다른 근거와 함께 보는 편이 좋습니다.",
+        reasons,
+    )
+
+
 def render_prediction_card(prediction: Prediction) -> None:
     metrics = prediction.metrics
     signal_is_up = prediction.signal == "UP"
@@ -1371,6 +1441,16 @@ def render_prediction_card(prediction: Prediction) -> None:
             f"무료 모델 비교 결과: `{prediction.model_label}` 선택 "
             f"(비교 기준: {model_basis_label(prediction.model_selection_basis)}, 개선폭: {selected_edge:+.2%}p)"
         )
+
+    action_label, action_tone, action_message, action_reasons = interpret_prediction_action(prediction)
+    if action_tone == "success":
+        st.success(f"행동 해석: **{action_label}**\n\n{action_message}")
+    elif action_tone == "warning":
+        st.warning(f"행동 해석: **{action_label}**\n\n{action_message}")
+    else:
+        st.info(f"행동 해석: **{action_label}**\n\n{action_message}")
+    with st.expander("왜 이렇게 해석했나요?", expanded=False):
+        st.markdown("\n".join(f"- {reason}" for reason in action_reasons))
 
     if strength_label == "매우 애매":
         st.info(
