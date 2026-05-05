@@ -89,6 +89,7 @@ def build_training_frame(history: pd.DataFrame, benchmark_history: pd.DataFrame 
 
     frame = features.copy()
     frame["target_up"] = np.where(next_close > close, 1.0, 0.0)
+    frame["next_day_return"] = next_close / close - 1
     frame.loc[next_close.isna(), "target_up"] = np.nan
     return frame.dropna(subset=FEATURE_COLUMNS + ["target_up"])
 

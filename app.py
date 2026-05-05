@@ -1301,6 +1301,53 @@ def build_model_comparison_frame(prediction: Prediction) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def render_prediction_backtest(prediction: Prediction) -> None:
+    if prediction.backtest is None:
+        return
+
+    summary = prediction.backtest.summary
+    st.markdown("**최근 검증 백테스트**")
+    st.caption("walk-forward 검증 구간에서 당시까지의 데이터만으로 하루씩 예측한 기록입니다.")
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("검증 일수", f"{summary.rows}")
+    c2.metric("상승 신호 수", f"{summary.signal_count}")
+    c3.metric("신호 적중률", f"{summary.hit_rate:.1%}")
+    c4.metric("신호 평균 수익", f"{summary.average_return:.2%}")
+
+    c5, c6 = st.columns(2)
+    c5.metric("전략 누적 수익", f"{summary.cumulative_strategy_return:.2%}")
+    c6.metric("단순 보유 수익", f"{summary.cumulative_buy_hold_return:.2%}")
+
+    chart_frame = pd.DataFrame(prediction.backtest.chart_rows)
+    if not chart_frame.empty:
+        chart_frame["date"] = pd.to_datetime(chart_frame["date"])
+        chart_frame = chart_frame.set_index("date").rename(
+            columns={
+                "strategy_return": "예측 신호 전략",
+                "buy_hold_return": "단순 보유",
+            }
+        )
+        st.line_chart(chart_frame, use_container_width=True)
+
+    with st.expander("최근 검증 로그 보기", expanded=False):
+        recent_frame = pd.DataFrame(prediction.backtest.recent_rows).rename(
+            columns={
+                "date": "날짜",
+                "probability_up": "상승확률",
+                "signal": "예측",
+                "actual": "실제",
+                "next_day_return": "다음날 수익률",
+                "strategy_return": "전략 수익률",
+            }
+        )
+        if not recent_frame.empty:
+            recent_frame["상승확률"] = recent_frame["상승확률"].map(lambda value: f"{value:.1%}")
+            recent_frame["다음날 수익률"] = recent_frame["다음날 수익률"].map(lambda value: f"{value:.2%}")
+            recent_frame["전략 수익률"] = recent_frame["전략 수익률"].map(lambda value: f"{value:.2%}")
+        st.dataframe(recent_frame, use_container_width=True, hide_index=True)
+
+
 def render_prediction_card(prediction: Prediction) -> None:
     metrics = prediction.metrics
     signal_is_up = prediction.signal == "UP"
@@ -1384,6 +1431,7 @@ def render_prediction_card(prediction: Prediction) -> None:
         ]
     )
     st.dataframe(summary_frame, use_container_width=True, hide_index=True)
+    render_prediction_backtest(prediction)
 
     with st.expander("자세한 모델 수치 보기", expanded=False):
         if metrics.accuracy < metrics.baseline_accuracy:

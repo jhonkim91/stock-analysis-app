@@ -57,6 +57,9 @@ class TrainingResult:
     model_selection_basis: str
     metrics: Metrics
     compared_models: list[ModelComparison]
+    walk_forward_actuals: np.ndarray | None = None
+    walk_forward_probabilities: np.ndarray | None = None
+    walk_forward_start_index: int | None = None
 
 
 @dataclass(frozen=True)
@@ -72,6 +75,9 @@ class _EvaluatedCandidate:
     label: str
     model: ProbabilityModel
     metrics: Metrics
+    walk_forward_actuals: np.ndarray | None = None
+    walk_forward_probabilities: np.ndarray | None = None
+    walk_forward_start_index: int | None = None
 
 
 class LogisticDirectionModel:
@@ -224,6 +230,9 @@ def train_direction_model(
         model_selection_basis=selection_basis,
         metrics=selected_candidate.metrics,
         compared_models=compared_models,
+        walk_forward_actuals=selected_candidate.walk_forward_actuals,
+        walk_forward_probabilities=selected_candidate.walk_forward_probabilities,
+        walk_forward_start_index=selected_candidate.walk_forward_start_index,
     )
 
 
@@ -313,6 +322,9 @@ def _evaluate_candidate(
             if recommendation is None
             else recommendation["balanced_accuracy"],
         ),
+        walk_forward_actuals=walk_forward_actuals,
+        walk_forward_probabilities=walk_forward_probabilities,
+        walk_forward_start_index=train_rows if walk_forward_actuals is not None else None,
     )
 
 
