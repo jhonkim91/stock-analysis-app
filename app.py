@@ -366,12 +366,14 @@ def build_fear_greed_dashboard_card(data) -> str:
 
 def build_fear_greed_gauge(*, score: float, status: str, accent_color: str) -> str:
     score = max(0.0, min(100.0, float(score)))
-    cx = 140.0
-    cy = 142.0
-    outer_radius = 118.0
-    inner_radius = 86.0
-    ring_radius = 70.0
-    needle_radius = 94.0
+    cx = 150.0
+    cy = 150.0
+    outer_radius = 110.0
+    inner_radius = 82.0
+    ring_radius = 64.0
+    needle_radius = 88.0
+    label_radius = 126.0
+    number_radius = 80.0
 
     segments = [
         (0.0, 25.0, "#ef4444", "극단적\n공포"),
@@ -414,7 +416,7 @@ def build_fear_greed_gauge(*, score: float, status: str, accent_color: str) -> s
                 label=label,
                 cx=cx,
                 cy=cy,
-                radius=133.0,
+                radius=label_radius,
                 color=text_color,
             )
         )
@@ -430,9 +432,9 @@ def build_fear_greed_gauge(*, score: float, status: str, accent_color: str) -> s
         )
 
     number_nodes: list[str] = []
-    for value in [0, 25, 50, 75, 100]:
+    for value in [0, 25, 45, 55, 75, 100]:
         angle = fear_greed_angle(float(value))
-        x, y = polar_to_cartesian(cx, cy, ring_radius + 16, angle)
+        x, y = polar_to_cartesian(cx, cy, number_radius, angle)
         number_nodes.append(
             f"<text x='{x:.2f}' y='{y + 4:.2f}' text-anchor='middle' font-size='11' font-weight='700' fill='#6b7280'>{value}</text>"
         )
@@ -442,7 +444,7 @@ def build_fear_greed_gauge(*, score: float, status: str, accent_color: str) -> s
 
     return (
         "<div style='display:flex; justify-content:center; padding:8px 0 4px 0;'>"
-        "<svg width='100%' viewBox='0 0 280 188' style='max-width:430px;'>"
+        "<svg width='100%' viewBox='0 0 300 206' style='max-width:430px;'>"
         f"{''.join(sector_paths)}"
         f"{''.join(label_nodes)}"
         f"{''.join(tick_nodes)}"
@@ -505,7 +507,7 @@ def build_fear_greed_sector_label(
         lines.append(f"<tspan x='{x:.2f}' dy='-6'>{parts[0]}</tspan>")
         lines.append(f"<tspan x='{x:.2f}' dy='14'>{parts[1]}</tspan>")
     return (
-        f"<text x='{x:.2f}' y='{y:.2f}' text-anchor='middle' font-size='10' font-weight='800' "
+        f"<text x='{x:.2f}' y='{y:.2f}' text-anchor='middle' font-size='9.5' font-weight='800' "
         f"fill='{color}' transform='rotate({rotate:.2f} {x:.2f} {y:.2f})'>{''.join(lines)}</text>"
     )
 
