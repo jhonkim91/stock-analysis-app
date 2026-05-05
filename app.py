@@ -57,6 +57,7 @@ st.set_page_config(
 
 
 def main() -> None:
+    inject_responsive_styles()
     render_header()
     render_sidebar()
 
@@ -91,6 +92,64 @@ def main() -> None:
 def render_header() -> None:
     st.title("주식 분석 프로그램")
     st.caption("1-5단계 실행 및 결과 조회")
+
+
+def inject_responsive_styles() -> None:
+    st.markdown(
+        """
+        <style>
+        @media (max-width: 768px) {
+          .block-container {
+            padding-top: 1rem !important;
+            padding-left: 0.85rem !important;
+            padding-right: 0.85rem !important;
+            padding-bottom: 2rem !important;
+          }
+
+          div[data-testid="stHorizontalBlock"] {
+            flex-direction: column !important;
+            gap: 0.75rem !important;
+          }
+
+          div[data-testid="column"] {
+            width: 100% !important;
+            flex: 1 1 100% !important;
+          }
+
+          button, div.stButton > button {
+            min-height: 2.6rem !important;
+          }
+
+          div[data-baseweb="tab-list"] {
+            gap: 0.25rem !important;
+            overflow-x: auto !important;
+            scrollbar-width: none;
+          }
+
+          div[data-baseweb="tab-list"]::-webkit-scrollbar {
+            display: none;
+          }
+
+          div[data-baseweb="tab"] {
+            padding-left: 0.7rem !important;
+            padding-right: 0.7rem !important;
+            white-space: nowrap !important;
+            font-size: 0.88rem !important;
+          }
+
+          div[data-testid="stMetric"] {
+            padding-top: 0.2rem;
+            padding-bottom: 0.2rem;
+          }
+
+          div[data-testid="stDataFrame"] {
+            overflow-x: auto !important;
+          }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def render_dashboard() -> None:
