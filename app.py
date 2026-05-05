@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -305,54 +306,161 @@ def build_fear_greed_dashboard_card(data) -> str:
 
 
 def build_fear_greed_gauge(*, score: float, status: str, accent_color: str) -> str:
-    progress = max(0.0, min(100.0, float(score)))
+    score = max(0.0, min(100.0, float(score)))
+    cx = 140.0
+    cy = 142.0
+    outer_radius = 118.0
+    inner_radius = 86.0
+    ring_radius = 70.0
+    needle_radius = 94.0
+
     segments = [
-        (0.0, 25.0, "#ef4444"),
-        (25.0, 45.0, "#f97316"),
-        (45.0, 55.0, "#facc15"),
-        (55.0, 75.0, "#22c55e"),
-        (75.0, 100.0, "#06b6d4"),
+        (0.0, 25.0, "#ef4444", "극단적\n공포"),
+        (25.0, 45.0, "#f97316", "공포"),
+        (45.0, 55.0, "#facc15", "중립"),
+        (55.0, 75.0, "#22c55e", "탐욕"),
+        (75.0, 100.0, "#06b6d4", "극단적\n탐욕"),
     ]
-    base_segments: list[str] = []
-    active_segments: list[str] = []
-    for start, end, color in segments:
-        base_segments.append(build_fear_greed_gauge_segment(start=start, end=end, color=color, opacity=0.18))
-        active_end = min(progress, end)
-        if active_end > start:
-            active_segments.append(build_fear_greed_gauge_segment(start=start, end=active_end, color=color, opacity=1.0))
+
+    active_index = 0
+    for index, (start, end, _, _) in enumerate(segments):
+        if score <= end or index == len(segments) - 1:
+            active_index = index
+            break
+
+    sector_paths: list[str] = []
+    label_nodes: list[str] = []
+    for index, (start, end, color, label) in enumerate(segments):
+        is_active = index == active_index
+        fill = f"{color}22" if is_active else "#ececec"
+        stroke = color if is_active else "#f8fafc"
+        text_color = "#111827" if is_active else "#737373"
+        sector_paths.append(
+            build_fear_greed_sector(
+                start=start,
+                end=end,
+                cx=cx,
+                cy=cy,
+                outer_radius=outer_radius,
+                inner_radius=inner_radius,
+                fill=fill,
+                stroke=stroke,
+                stroke_width=2.0 if is_active else 1.5,
+            )
+        )
+        label_nodes.append(
+            build_fear_greed_sector_label(
+                start=start,
+                end=end,
+                label=label,
+                cx=cx,
+                cy=cy,
+                radius=133.0,
+                color=text_color,
+            )
+        )
+
+    tick_nodes: list[str] = []
+    for value in range(0, 101, 5):
+        angle = fear_greed_angle(value)
+        x1, y1 = polar_to_cartesian(cx, cy, ring_radius + 2, angle)
+        x2, y2 = polar_to_cartesian(cx, cy, ring_radius + (7 if value % 25 == 0 else 4), angle)
+        width = 2 if value % 25 == 0 else 1
+        tick_nodes.append(
+            f"<line x1='{x1:.2f}' y1='{y1:.2f}' x2='{x2:.2f}' y2='{y2:.2f}' stroke='#9ca3af' stroke-width='{width}' stroke-linecap='round' />"
+        )
+
+    number_nodes: list[str] = []
+    for value in [0, 25, 50, 75, 100]:
+        angle = fear_greed_angle(float(value))
+        x, y = polar_to_cartesian(cx, cy, ring_radius + 16, angle)
+        number_nodes.append(
+            f"<text x='{x:.2f}' y='{y + 4:.2f}' text-anchor='middle' font-size='11' font-weight='700' fill='#6b7280'>{value}</text>"
+        )
+
+    angle = fear_greed_angle(score)
+    nx, ny = polar_to_cartesian(cx, cy, needle_radius, angle)
 
     return (
-        "<div style='display:flex; justify-content:center; padding:4px 0 6px 0;'>"
-        "<svg width='100%' viewBox='0 0 280 170' style='max-width:420px;'>"
-        "<path d='M 40 140 A 100 100 0 0 1 240 140' fill='none' stroke='#e2e8f0' stroke-width='18' stroke-linecap='round' pathLength='100'/>"
-        f"{''.join(base_segments)}"
-        f"{''.join(active_segments)}"
-        "<circle cx='140' cy='108' r='38' fill='#ffffff' opacity='0.99'/>"
-        "<text x='26' y='150' font-size='11' font-weight='700' fill='#64748b'>0</text>"
-        "<text x='70' y='76' font-size='11' font-weight='700' fill='#64748b'>25</text>"
-        "<text x='102' y='49' font-size='11' font-weight='700' fill='#64748b'>45</text>"
-        "<text x='164' y='49' font-size='11' font-weight='700' fill='#64748b'>55</text>"
-        "<text x='197' y='76' font-size='11' font-weight='700' fill='#64748b'>75</text>"
-        "<text x='232' y='150' font-size='11' font-weight='700' fill='#64748b'>100</text>"
-        f"<text x='140' y='114' text-anchor='middle' font-size='52' font-weight='900' fill='{accent_color}'>{int(round(score))}</text>"
-        f"<text x='140' y='138' text-anchor='middle' font-size='15' font-weight='800' fill='{accent_color}'>{status}</text>"
+        "<div style='display:flex; justify-content:center; padding:8px 0 4px 0;'>"
+        "<svg width='100%' viewBox='0 0 280 188' style='max-width:430px;'>"
+        f"{''.join(sector_paths)}"
+        f"{''.join(label_nodes)}"
+        f"{''.join(tick_nodes)}"
+        f"{''.join(number_nodes)}"
+        f"<line x1='{cx:.2f}' y1='{cy:.2f}' x2='{nx:.2f}' y2='{ny:.2f}' stroke='#1f2937' stroke-width='6' stroke-linecap='round' />"
+        f"<circle cx='{cx:.2f}' cy='{cy:.2f}' r='8' fill='#1f2937' />"
+        f"<circle cx='{cx:.2f}' cy='{cy:.2f}' r='35' fill='#ffffff' opacity='0.98' />"
+        f"<text x='{cx:.2f}' y='{cy + 2:.2f}' text-anchor='middle' font-size='22' font-weight='900' fill='#111827'>{int(round(score))}</text>"
         "</svg>"
         "</div>"
     )
 
 
-def build_fear_greed_gauge_segment(*, start: float, end: float, color: str, opacity: float) -> str:
-    visible_length = max(0.0, end - start)
-    if visible_length <= 0:
-        return ""
+def build_fear_greed_sector(
+    *,
+    start: float,
+    end: float,
+    cx: float,
+    cy: float,
+    outer_radius: float,
+    inner_radius: float,
+    fill: str,
+    stroke: str,
+    stroke_width: float,
+) -> str:
+    start_angle = fear_greed_angle(start)
+    end_angle = fear_greed_angle(end)
+    x1o, y1o = polar_to_cartesian(cx, cy, outer_radius, start_angle)
+    x2o, y2o = polar_to_cartesian(cx, cy, outer_radius, end_angle)
+    x1i, y1i = polar_to_cartesian(cx, cy, inner_radius, start_angle)
+    x2i, y2i = polar_to_cartesian(cx, cy, inner_radius, end_angle)
+    large_arc = 1 if abs(end_angle - start_angle) > 180 else 0
+    path = (
+        f"M {x1o:.2f} {y1o:.2f} "
+        f"A {outer_radius:.2f} {outer_radius:.2f} 0 {large_arc} 1 {x2o:.2f} {y2o:.2f} "
+        f"L {x2i:.2f} {y2i:.2f} "
+        f"A {inner_radius:.2f} {inner_radius:.2f} 0 {large_arc} 0 {x1i:.2f} {y1i:.2f} Z"
+    )
+    return f"<path d='{path}' fill='{fill}' stroke='{stroke}' stroke-width='{stroke_width:.1f}' />"
 
-    gap = 1.2
-    adjusted_start = start + (gap / 2)
-    adjusted_length = max(0.8, visible_length - gap)
+
+def build_fear_greed_sector_label(
+    *,
+    start: float,
+    end: float,
+    label: str,
+    cx: float,
+    cy: float,
+    radius: float,
+    color: str,
+) -> str:
+    angle = (fear_greed_angle(start) + fear_greed_angle(end)) / 2
+    x, y = polar_to_cartesian(cx, cy, radius, angle)
+    rotate = angle - 90
+    parts = label.split("\n")
+    lines = []
+    if len(parts) == 1:
+        lines.append(f"<tspan x='{x:.2f}' dy='0'>{parts[0]}</tspan>")
+    else:
+        lines.append(f"<tspan x='{x:.2f}' dy='-6'>{parts[0]}</tspan>")
+        lines.append(f"<tspan x='{x:.2f}' dy='14'>{parts[1]}</tspan>")
     return (
-        f"<path d='M 40 140 A 100 100 0 0 1 240 140' fill='none' stroke='{color}' "
-        f"stroke-width='18' stroke-linecap='round' pathLength='100' opacity='{opacity:.3f}' "
-        f"stroke-dasharray='{adjusted_length:.3f} 100' stroke-dashoffset='{-adjusted_start:.3f}'/>"
+        f"<text x='{x:.2f}' y='{y:.2f}' text-anchor='middle' font-size='10' font-weight='800' "
+        f"fill='{color}' transform='rotate({rotate:.2f} {x:.2f} {y:.2f})'>{''.join(lines)}</text>"
+    )
+
+
+def fear_greed_angle(score: float) -> float:
+    clamped = max(0.0, min(100.0, float(score)))
+    return 180.0 - (clamped / 100.0 * 180.0)
+
+
+def polar_to_cartesian(cx: float, cy: float, radius: float, angle_deg: float) -> tuple[float, float]:
+    radians = math.radians(angle_deg)
+    return (
+        cx + radius * math.cos(radians),
+        cy - radius * math.sin(radians),
     )
 
 
