@@ -16,6 +16,10 @@ from stock_analysis.data import load_history, normalize_ticker
 class FinancialSnapshot:
     ticker: str
     name: str
+    sector: str
+    industry: str
+    quote_type: str
+    valuation_profile: str
     currency: str
     financial_currency: str
     current_price: float
@@ -226,9 +230,13 @@ def fetch_financial_snapshot(ticker: str) -> FinancialSnapshot:
     free_cash_flow_per_share = free_cash_flow / shares if free_cash_flow is not None and shares else None
     roe = net_income / total_equity if net_income is not None and total_equity and total_equity > 0 else None
 
-    return FinancialSnapshot(
+    snapshot = FinancialSnapshot(
         ticker=ticker,
         name=str(info.get("shortName") or info.get("longName") or ticker),
+        sector=str(info.get("sector") or ""),
+        industry=str(info.get("industry") or ""),
+        quote_type=str(info.get("quoteType") or ""),
+        valuation_profile="",
         currency=str(info.get("currency") or ""),
         financial_currency=str(info.get("financialCurrency") or info.get("currency") or ""),
         current_price=float(current_price),
@@ -263,6 +271,9 @@ def fetch_financial_snapshot(ticker: str) -> FinancialSnapshot:
         forward_pe=_clean_number(info.get("forwardPE")),
         price_to_book=_clean_number(info.get("priceToBook")),
     )
+
+    snapshot.valuation_profile = _infer_valuation_profile(snapshot)
+    return snapshot
 
 
 def _build_assumptions(
@@ -309,6 +320,7 @@ def _build_methods(
     assumptions: ValuationAssumptions,
 ) -> list[ValuationMethod]:
     methods: list[ValuationMethod] = []
+    weights = _method_weights_for_profile(snapshot.valuation_profile)
 
     if snapshot.eps is not None and snapshot.eps > 0 and assumptions.target_pe > 0:
         target = snapshot.eps * assumptions.target_pe
@@ -316,7 +328,7 @@ def _build_methods(
             ValuationMethod(
                 name="PER",
                 target_price=target,
-                weight=0.45,
+                weight=weights["PER"],
                 detail=f"EPS {snapshot.eps:.4f} x target PER {assumptions.target_pe:.2f}",
             )
         )
@@ -331,7 +343,7 @@ def _build_methods(
             ValuationMethod(
                 name="PBR",
                 target_price=target,
-                weight=0.15,
+                weight=weights["PBR"],
                 detail=f"BPS {snapshot.book_value_per_share:.4f} x target PBR {assumptions.target_pbr:.2f}",
             )
         )
@@ -348,7 +360,7 @@ def _build_methods(
                 ValuationMethod(
                     name="DCF",
                     target_price=target,
-                    weight=0.40,
+                    weight=weights["DCF"],
                     detail=(
                         f"FCF growth {assumptions.dcf_growth:.2%}, "
                         f"discount {assumptions.discount_rate:.2%}, "
@@ -532,9 +544,65 @@ def _clamp(value: float | None, low: float, high: float, *, default: float) -> f
 def _auto_target_pe(snapshot: FinancialSnapshot, growth: float) -> float:
     roe_bonus = _clamp(snapshot.roe, 0.0, 0.25, default=0.08) * 20
     growth_bonus = max(growth, 0.0) * 60
-    return _clamp(10 + roe_bonus + growth_bonus, 8, 30, default=15)
+    profile = snapshot.valuation_profile
+    base = 10 + roe_bonus + growth_bonus
+    if profile == "financial":
+        base -= 2.5
+        return _clamp(base, 6, 16, default=10)
+    if profile == "asset_heavy":
+        base -= 1.0
+        return _clamp(base, 7, 20, default=11)
+    if profile == "growth":
+        base += 3.0
+        return _clamp(base, 10, 35, default=18)
+    if profile == "turnaround":
+        base -= 1.5
+        return _clamp(base, 6, 18, default=9)
+    return _clamp(base, 8, 30, default=15)
 
 
 def _auto_target_pbr(snapshot: FinancialSnapshot) -> float:
     roe = _clamp(snapshot.roe, 0.0, 0.30, default=0.08)
-    return _clamp(0.6 + roe * 10, 0.5, 5.0, default=1.2)
+    base = 0.6 + roe * 10
+    profile = snapshot.valuation_profile
+    if profile == "financial":
+        base += 0.2
+        return _clamp(base, 0.6, 2.5, default=1.0)
+    if profile == "asset_heavy":
+        return _clamp(base, 0.5, 3.0, default=1.0)
+    if profile == "growth":
+        base += 0.3
+        return _clamp(base, 0.8, 6.0, default=1.8)
+    if profile == "turnaround":
+        return _clamp(base, 0.4, 2.2, default=0.9)
+    return _clamp(base, 0.5, 5.0, default=1.2)
+
+
+def _infer_valuation_profile(snapshot: FinancialSnapshot) -> str:
+    sector = snapshot.sector.lower()
+    industry = snapshot.industry.lower()
+    quote_type = snapshot.quote_type.lower()
+
+    if quote_type in {"etf", "mutualfund", "fund"}:
+        return "fund"
+    if any(keyword in sector or keyword in industry for keyword in ["financial", "bank", "insurance", "capital markets"]):
+        return "financial"
+    if any(keyword in sector for keyword in ["real estate", "utilities", "basic materials", "industrials", "energy"]):
+        return "asset_heavy"
+    if any(keyword in sector for keyword in ["technology", "communication"]) and (snapshot.revenue_growth or 0.0) > 0.08:
+        return "growth"
+    if (snapshot.eps or 0.0) <= 0 or (snapshot.net_income or 0.0) <= 0:
+        return "turnaround"
+    return "general"
+
+
+def _method_weights_for_profile(profile: str) -> dict[str, float]:
+    if profile == "financial":
+        return {"PER": 0.25, "PBR": 0.55, "DCF": 0.20}
+    if profile == "asset_heavy":
+        return {"PER": 0.30, "PBR": 0.35, "DCF": 0.35}
+    if profile == "growth":
+        return {"PER": 0.45, "PBR": 0.10, "DCF": 0.45}
+    if profile == "turnaround":
+        return {"PER": 0.10, "PBR": 0.40, "DCF": 0.50}
+    return {"PER": 0.45, "PBR": 0.15, "DCF": 0.40}

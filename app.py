@@ -1735,6 +1735,12 @@ def render_prediction_card(
 def render_valuation_card(result: ValuationResult) -> None:
     snapshot = result.snapshot
     st.subheader(f"{result.ticker} · {snapshot.name}")
+    if snapshot.valuation_profile:
+        st.caption(
+            f"기업 유형 보정: `{snapshot.valuation_profile}`"
+            + (f" · 섹터 `{snapshot.sector}`" if snapshot.sector else "")
+            + (f" · 산업 `{snapshot.industry}`" if snapshot.industry else "")
+        )
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("현재가", f"{result.current_price:,.2f} {snapshot.currency}")
     c2.metric("목표주가", f"{result.target_price:,.2f}")
@@ -1750,6 +1756,7 @@ def render_valuation_card(result: ValuationResult) -> None:
             [
                 {
                     "기준일": snapshot.statement_date,
+                    "유형": snapshot.valuation_profile,
                     "EPS": snapshot.eps,
                     "BPS": snapshot.book_value_per_share,
                     "FCF/share": snapshot.free_cash_flow_per_share,
