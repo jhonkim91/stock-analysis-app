@@ -168,6 +168,8 @@ def _run_item(
                 interval=interval,
                 test_size=test_size,
                 threshold=threshold,
+                compute_walk_forward_metrics=True,
+                optimize_threshold=True,
             )
             return _prediction_row(item, prediction, run_at=run_at, attempt=attempt)
         except Exception as exc:

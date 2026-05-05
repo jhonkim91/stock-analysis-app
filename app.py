@@ -9,7 +9,9 @@ import pandas as pd
 import streamlit as st
 
 from stock_analysis.auto_runner import run_watchlist
+from stock_analysis.data import normalize_ticker
 from stock_analysis.fear_greed import fetch_fear_greed_data
+from stock_analysis.performance_profiles import SettingProfile, build_setting_profiles, get_setting_profile
 from stock_analysis.predictor import Prediction, predict_next_day
 from stock_analysis.stock_search import search_stock_candidates
 from stock_analysis.supabase_store import (
@@ -597,6 +599,18 @@ def render_single_prediction() -> None:
         st.caption("예: 005930, 삼성전자, AAPL, Apple")
         st.caption("거래소는 검색 결과를 바탕으로 자동 판별합니다.")
         render_stock_candidates(ticker, "", key_prefix="single_pred")
+        guessed_profile = None
+        try:
+            guessed_symbol = normalize_ticker(ticker)
+            guessed_profile = get_ticker_setting_profile_context(guessed_symbol, get_active_user_id())
+        except Exception:
+            guessed_profile = None
+        if guessed_profile is not None:
+            st.caption(
+                f"누적 성능 기반 추천 설정: 기준값 {guessed_profile.preferred_threshold or 0.5:.2f}"
+                f" / 모델 {guessed_profile.preferred_model_label or guessed_profile.preferred_model_name or '-'}"
+                f" / 기록 {guessed_profile.run_count}회"
+            )
         period = st.selectbox(
             "조회기간",
             ["2y", "5y", "10y"],
@@ -638,18 +652,31 @@ def render_single_prediction() -> None:
             value=True,
             help="한국 공포탐욕 지수를 함께 읽어서, 과열/과매도 구간에서는 예측 해석을 조금 더 보수적이거나 역발상 관점으로 조정합니다.",
         )
+        apply_profile_settings = st.checkbox(
+            "누적 성능 기반 추천 설정 적용",
+            value=True,
+            help="이 종목의 과거 누적 기록을 바탕으로 더 자주 잘 맞았던 threshold와 모델 비교 옵션을 자동 반영합니다.",
+        )
         run = st.button("예측 실행", type="primary", use_container_width=True)
 
     with right:
         if run:
+            profile_context = guessed_profile
+            effective_threshold = threshold
+            effective_compare_tree_model = compare_tree_model
+            if apply_profile_settings and profile_context is not None:
+                if not auto_threshold and profile_context.preferred_threshold is not None:
+                    effective_threshold = float(profile_context.preferred_threshold)
+                if profile_context.should_compare_tree:
+                    effective_compare_tree_model = True
             with st.spinner("예측 중"):
                 prediction = predict_next_day(
                     ticker,
                     period=period,
-                    threshold=threshold,
+                    threshold=effective_threshold,
                     compute_walk_forward_metrics=True,
                     optimize_threshold=auto_threshold,
-                    compare_tree_model=compare_tree_model,
+                    compare_tree_model=effective_compare_tree_model,
                 )
             market_context = None
             if apply_market_filter:
@@ -668,6 +695,7 @@ def render_single_prediction() -> None:
                 prediction,
                 market_context=market_context,
                 performance_context=performance_context,
+                setting_profile_context=profile_context,
             )
         else:
             render_latest_csv_preview("outputs", "predictions.csv", key_prefix="single_prediction_latest")
@@ -1051,6 +1079,10 @@ def build_performance_leaderboard(user_id: str | None = None, *, min_records: in
     ).reset_index(drop=True)
 
 
+def performance_base_dir(user_id: str | None = None) -> Path:
+    return user_outputs_dir(user_id) if user_id else OUTPUTS
+
+
 def get_ticker_performance_context(ticker: str, user_id: str | None = None) -> dict[str, Any] | None:
     leaderboard = build_performance_leaderboard(user_id, min_records=1)
     if leaderboard.empty or "티커" not in leaderboard.columns:
@@ -1072,6 +1104,10 @@ def get_ticker_performance_context(ticker: str, user_id: str | None = None) -> d
     }
 
 
+def get_ticker_setting_profile_context(ticker: str, user_id: str | None = None) -> SettingProfile | None:
+    return get_setting_profile(performance_base_dir(user_id), ticker, min_records=2)
+
+
 def render_performance_leaderboard(user_id: str | None = None) -> None:
     st.markdown("**성능 리더보드**")
     min_records = st.selectbox(
@@ -1089,6 +1125,50 @@ def render_performance_leaderboard(user_id: str | None = None) -> None:
     st.dataframe(leaderboard.head(20), use_container_width=True, hide_index=True)
 
 
+def render_setting_profiles_summary(user_id: str | None = None) -> None:
+    st.markdown("**추천 설정 프로필**")
+    profiles = [
+        profile.to_dict()
+        for profile in sorted(
+            get_setting_profile_profiles(user_id),
+            key=lambda item: (
+                -(item.avg_hit_rate or -1.0),
+                -(item.avg_walk_forward_edge or -1.0),
+                -item.run_count,
+            ),
+        )
+    ]
+    if not profiles:
+        st.info("아직 종목별 추천 설정 프로필을 만들 만큼 기록이 쌓이지 않았습니다.")
+        return
+
+    frame = pd.DataFrame(profiles).rename(
+        columns={
+            "ticker": "티커",
+            "run_count": "기록 수",
+            "preferred_threshold": "추천 threshold",
+            "preferred_model_name": "추천 모델 key",
+            "preferred_model_label": "추천 모델",
+            "should_compare_tree": "트리 비교 추천",
+            "avg_accuracy_edge": "평균 검증 개선폭",
+            "avg_walk_forward_edge": "평균 WF 개선폭",
+            "avg_hit_rate": "평균 적중률",
+            "avg_strategy_return": "평균 전략 누적수익",
+        }
+    )
+    st.caption("같은 종목의 누적 결과를 묶어서, 다음 예측 때 기본값처럼 참고할 설정 요약입니다.")
+    st.dataframe(frame.head(20), use_container_width=True, hide_index=True)
+
+
+def get_setting_profile_profiles(user_id: str | None = None) -> list[SettingProfile]:
+    return build_setting_profiles_cached(performance_base_dir(user_id))
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def build_setting_profiles_cached(base_dir: Path) -> list[SettingProfile]:
+    return build_setting_profiles(base_dir, min_records=2)
+
+
 def render_results() -> None:
     auth_user = get_authenticated_user()
     config = get_supabase_config()
@@ -1101,6 +1181,8 @@ def render_results() -> None:
     user_id = get_active_user_id()
     show_all = st.checkbox("전체 결과 보기", value=False, key="results_show_all")
     render_performance_leaderboard(None if show_all else user_id)
+    st.divider()
+    render_setting_profiles_summary(None if show_all else user_id)
     st.divider()
     result_files = list_result_files(None if show_all else user_id)
     if result_files:
@@ -1670,6 +1752,7 @@ def render_prediction_card(
     prediction: Prediction,
     market_context: dict[str, Any] | None = None,
     performance_context: dict[str, Any] | None = None,
+    setting_profile_context: SettingProfile | None = None,
 ) -> None:
     metrics = prediction.metrics
     signal_is_up = prediction.signal == "UP"
@@ -1701,6 +1784,16 @@ def render_prediction_card(
     if performance_context is not None:
         st.caption(
             f"누적 성능 참고: 기록 {performance_context['run_count']}회 / 성능 점수 {performance_context['score']:.3f}"
+        )
+    if setting_profile_context is not None:
+        threshold_label = (
+            f"{setting_profile_context.preferred_threshold:.2f}"
+            if setting_profile_context.preferred_threshold is not None
+            else "-"
+        )
+        model_label = setting_profile_context.preferred_model_label or setting_profile_context.preferred_model_name or "-"
+        st.caption(
+            f"추천 설정 프로필: threshold `{threshold_label}` / 선호 모델 `{model_label}`"
         )
 
     action_label, action_tone, action_message, action_reasons = interpret_prediction_action(
