@@ -206,6 +206,7 @@ def _prediction_row(
     attempt: int,
 ) -> dict[str, Any]:
     metrics = prediction.metrics
+    backtest = prediction.backtest.summary if prediction.backtest is not None else None
     return {
         "run_at": run_at,
         "status": "success",
@@ -218,12 +219,38 @@ def _prediction_row(
         "signal": prediction.signal,
         "probability_up": round(prediction.probability_up, 6),
         "probability_down": round(prediction.probability_down, 6),
+        "threshold": round(prediction.threshold, 4),
+        "threshold_source": prediction.threshold_source,
+        "model_name": prediction.model_name,
+        "model_label": prediction.model_label,
+        "model_selection_basis": prediction.model_selection_basis,
         "accuracy": round(metrics.accuracy, 6),
         "baseline_accuracy": round(metrics.baseline_accuracy, 6),
+        "accuracy_edge": round(metrics.edge_vs_baseline, 6),
+        "balanced_accuracy": round(metrics.balanced_accuracy, 6),
         "precision_up": round(metrics.precision_up, 6),
         "recall_up": round(metrics.recall_up, 6),
+        "walk_forward_accuracy": ""
+        if metrics.walk_forward_accuracy is None
+        else round(metrics.walk_forward_accuracy, 6),
+        "walk_forward_edge": ""
+        if metrics.walk_forward_edge_vs_baseline is None
+        else round(metrics.walk_forward_edge_vs_baseline, 6),
+        "recommended_threshold": ""
+        if metrics.recommended_threshold is None
+        else round(metrics.recommended_threshold, 4),
         "train_rows": metrics.train_rows,
         "test_rows": metrics.test_rows,
+        "backtest_rows": "" if backtest is None else backtest.rows,
+        "backtest_signal_count": "" if backtest is None else backtest.signal_count,
+        "backtest_hit_rate": "" if backtest is None else round(backtest.hit_rate, 6),
+        "backtest_average_return": "" if backtest is None else round(backtest.average_return, 6),
+        "backtest_cumulative_strategy_return": ""
+        if backtest is None
+        else round(backtest.cumulative_strategy_return, 6),
+        "backtest_cumulative_buy_hold_return": ""
+        if backtest is None
+        else round(backtest.cumulative_buy_hold_return, 6),
         "attempt": attempt,
         "error": "",
     }
@@ -251,12 +278,28 @@ def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         "signal",
         "probability_up",
         "probability_down",
+        "threshold",
+        "threshold_source",
+        "model_name",
+        "model_label",
+        "model_selection_basis",
         "accuracy",
         "baseline_accuracy",
+        "accuracy_edge",
+        "balanced_accuracy",
         "precision_up",
         "recall_up",
+        "walk_forward_accuracy",
+        "walk_forward_edge",
+        "recommended_threshold",
         "train_rows",
         "test_rows",
+        "backtest_rows",
+        "backtest_signal_count",
+        "backtest_hit_rate",
+        "backtest_average_return",
+        "backtest_cumulative_strategy_return",
+        "backtest_cumulative_buy_hold_return",
         "attempt",
         "error",
     ]

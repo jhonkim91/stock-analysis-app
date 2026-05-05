@@ -663,7 +663,12 @@ def render_single_prediction() -> None:
                     }
                 except Exception:
                     market_context = None
-            render_prediction_card(prediction, market_context=market_context)
+            performance_context = get_ticker_performance_context(prediction.ticker, get_active_user_id())
+            render_prediction_card(
+                prediction,
+                market_context=market_context,
+                performance_context=performance_context,
+            )
         else:
             render_latest_csv_preview("outputs", "predictions.csv", key_prefix="single_prediction_latest")
 
@@ -958,6 +963,132 @@ def render_fear_greed_detail_section() -> None:
         st.dataframe(guide, use_container_width=True, hide_index=True)
 
 
+def list_prediction_result_files(user_id: str | None = None) -> list[Path]:
+    base_dir = user_outputs_dir(user_id) if user_id else OUTPUTS
+    if not base_dir.exists():
+        return []
+    files = [path for path in base_dir.rglob("predictions.csv") if path.is_file()]
+    return sorted(files, key=lambda path: path.stat().st_mtime, reverse=True)
+
+
+def build_performance_leaderboard(user_id: str | None = None, *, min_records: int = 1) -> pd.DataFrame:
+    collected: list[pd.DataFrame] = []
+    for path in list_prediction_result_files(user_id):
+        try:
+            frame = pd.read_csv(path)
+        except Exception:
+            continue
+        if frame.empty or "status" not in frame.columns or "ticker" not in frame.columns:
+            continue
+        frame = frame[frame["status"] == "success"].copy()
+        if frame.empty:
+            continue
+        frame["name"] = frame.get("name", "").fillna("")
+        frame["probability_up"] = pd.to_numeric(frame.get("probability_up"), errors="coerce")
+        frame["accuracy"] = pd.to_numeric(frame.get("accuracy"), errors="coerce")
+        frame["baseline_accuracy"] = pd.to_numeric(frame.get("baseline_accuracy"), errors="coerce")
+        frame["accuracy_edge"] = pd.to_numeric(frame.get("accuracy_edge"), errors="coerce")
+        if frame["accuracy_edge"].isna().all():
+            frame["accuracy_edge"] = frame["accuracy"] - frame["baseline_accuracy"]
+        frame["walk_forward_edge"] = pd.to_numeric(frame.get("walk_forward_edge"), errors="coerce")
+        frame["backtest_hit_rate"] = pd.to_numeric(frame.get("backtest_hit_rate"), errors="coerce")
+        frame["backtest_average_return"] = pd.to_numeric(frame.get("backtest_average_return"), errors="coerce")
+        frame["backtest_cumulative_strategy_return"] = pd.to_numeric(
+            frame.get("backtest_cumulative_strategy_return"),
+            errors="coerce",
+        )
+        collected.append(frame)
+
+    if not collected:
+        return pd.DataFrame()
+
+    all_rows = pd.concat(collected, ignore_index=True)
+    leaderboard_rows: list[dict[str, Any]] = []
+    for ticker, group in all_rows.groupby("ticker", dropna=True):
+        run_count = int(len(group))
+        if run_count < min_records:
+            continue
+        non_empty_names = [value for value in group["name"].astype(str).tolist() if value.strip()]
+        name = non_empty_names[0] if non_empty_names else str(ticker)
+        avg_probability = float(group["probability_up"].dropna().mean()) if group["probability_up"].notna().any() else float("nan")
+        avg_accuracy_edge = float(group["accuracy_edge"].dropna().mean()) if group["accuracy_edge"].notna().any() else float("nan")
+        avg_walk_forward_edge = (
+            float(group["walk_forward_edge"].dropna().mean()) if group["walk_forward_edge"].notna().any() else float("nan")
+        )
+        avg_hit_rate = float(group["backtest_hit_rate"].dropna().mean()) if group["backtest_hit_rate"].notna().any() else float("nan")
+        avg_strategy_return = (
+            float(group["backtest_cumulative_strategy_return"].dropna().mean())
+            if group["backtest_cumulative_strategy_return"].notna().any()
+            else float("nan")
+        )
+        score = (
+            (0.45 * (0.0 if pd.isna(avg_hit_rate) else avg_hit_rate))
+            + (0.30 * max(0.0, 0.0 if pd.isna(avg_walk_forward_edge) else avg_walk_forward_edge))
+            + (0.20 * max(0.0, 0.0 if pd.isna(avg_strategy_return) else avg_strategy_return))
+            + (0.05 * min(run_count / 10, 1.0))
+        )
+        leaderboard_rows.append(
+            {
+                "종목명": name,
+                "티커": str(ticker),
+                "기록 수": run_count,
+                "평균 상승확률": avg_probability,
+                "평균 검증 개선폭": avg_accuracy_edge,
+                "평균 WF 개선폭": avg_walk_forward_edge,
+                "평균 신호 적중률": avg_hit_rate,
+                "평균 전략 누적수익": avg_strategy_return,
+                "성능 점수": score,
+            }
+        )
+
+    if not leaderboard_rows:
+        return pd.DataFrame()
+
+    leaderboard = pd.DataFrame(leaderboard_rows)
+    return leaderboard.sort_values(
+        by=["성능 점수", "평균 신호 적중률", "평균 WF 개선폭", "기록 수"],
+        ascending=[False, False, False, False],
+    ).reset_index(drop=True)
+
+
+def get_ticker_performance_context(ticker: str, user_id: str | None = None) -> dict[str, Any] | None:
+    leaderboard = build_performance_leaderboard(user_id, min_records=1)
+    if leaderboard.empty or "티커" not in leaderboard.columns:
+        return None
+    matched = leaderboard[leaderboard["티커"] == ticker]
+    if matched.empty:
+        return None
+    row = matched.iloc[0]
+    return {
+        "run_count": int(row["기록 수"]),
+        "score": float(row["성능 점수"]),
+        "avg_hit_rate": None if pd.isna(row["평균 신호 적중률"]) else float(row["평균 신호 적중률"]),
+        "avg_strategy_return": None
+        if pd.isna(row["평균 전략 누적수익"])
+        else float(row["평균 전략 누적수익"]),
+        "avg_walk_forward_edge": None
+        if pd.isna(row["평균 WF 개선폭"])
+        else float(row["평균 WF 개선폭"]),
+    }
+
+
+def render_performance_leaderboard(user_id: str | None = None) -> None:
+    st.markdown("**성능 리더보드**")
+    min_records = st.selectbox(
+        "최소 기록 수",
+        [1, 2, 3, 5, 10],
+        index=1,
+        key=f"performance_min_records_{user_id or 'all'}",
+        help="같은 종목이 몇 번 이상 기록된 경우만 리더보드에 올릴지 정합니다.",
+    )
+    leaderboard = build_performance_leaderboard(user_id, min_records=int(min_records))
+    if leaderboard.empty:
+        st.info("아직 누적된 예측 기록이 부족해서 성능 리더보드를 만들 수 없습니다.")
+        return
+    st.caption("누적된 예측 결과를 종목별로 묶어, 최근에 상대적으로 잘 맞는 종목을 찾는 표입니다.")
+    st.dataframe(leaderboard.head(20), use_container_width=True, hide_index=True)
+
+
 def render_results() -> None:
     auth_user = get_authenticated_user()
     config = get_supabase_config()
@@ -969,6 +1100,8 @@ def render_results() -> None:
 
     user_id = get_active_user_id()
     show_all = st.checkbox("전체 결과 보기", value=False, key="results_show_all")
+    render_performance_leaderboard(None if show_all else user_id)
+    st.divider()
     result_files = list_result_files(None if show_all else user_id)
     if result_files:
         if not show_all:
@@ -1403,6 +1536,7 @@ def render_prediction_backtest(prediction: Prediction) -> None:
 def interpret_prediction_action(
     prediction: Prediction,
     market_context: dict[str, Any] | None = None,
+    performance_context: dict[str, Any] | None = None,
 ) -> tuple[str, str, str, list[str]]:
     metrics = prediction.metrics
     probability_up = float(prediction.probability_up)
@@ -1429,6 +1563,14 @@ def interpret_prediction_action(
     market_status = None if market_context is None else str(market_context["status"])
     if market_score is not None and market_status is not None:
         reasons.append(f"현재 시장 심리 {market_score:.1f}점 ({market_status})")
+    if performance_context is not None:
+        reasons.append(
+            f"누적 성능 기록 {performance_context['run_count']}회, 성능 점수 {performance_context['score']:.3f}"
+        )
+        if performance_context["avg_hit_rate"] is not None:
+            reasons.append(f"누적 평균 신호 적중률 {performance_context['avg_hit_rate']:.1%}")
+        if performance_context["avg_walk_forward_edge"] is not None:
+            reasons.append(f"누적 평균 WF 개선폭 {performance_context['avg_walk_forward_edge']:+.2%}p")
 
     if prediction.signal == "DOWN":
         if market_score is not None and market_score <= 25:
@@ -1460,6 +1602,19 @@ def interpret_prediction_action(
             reasons,
         )
 
+    if (
+        performance_context is not None
+        and performance_context["run_count"] >= 2
+        and (performance_context["avg_hit_rate"] or 0.0) < 0.48
+        and (performance_context["avg_walk_forward_edge"] or 0.0) < 0
+    ):
+        return (
+            "성능 주의 후보",
+            "warning",
+            "현재 신호 자체는 나쁘지 않지만, 이 종목은 누적 기록상 예측 일관성이 약한 편입니다. 비중을 줄이거나 추가 근거를 더 확인하는 해석이 좋습니다.",
+            reasons,
+        )
+
     if market_score is not None and market_score >= 75 and probability_up < 0.62:
         return (
             "신중한 관심",
@@ -1477,6 +1632,17 @@ def interpret_prediction_action(
         )
 
     if probability_up >= 0.65 and confidence_gap >= 0.15 and (hit_rate is None or hit_rate >= 0.55):
+        if (
+            performance_context is not None
+            and performance_context["run_count"] >= 2
+            and (performance_context["avg_hit_rate"] or 0.0) >= 0.55
+        ):
+            return (
+                "강한 관심 후보",
+                "success",
+                "상승 우세가 뚜렷하고, 이 종목은 누적 성능 기록에서도 비교적 안정적인 편입니다. 우선 점검할 후보로 보기 좋습니다.",
+                reasons,
+            )
         return (
             "강한 관심 후보",
             "success",
@@ -1503,6 +1669,7 @@ def interpret_prediction_action(
 def render_prediction_card(
     prediction: Prediction,
     market_context: dict[str, Any] | None = None,
+    performance_context: dict[str, Any] | None = None,
 ) -> None:
     metrics = prediction.metrics
     signal_is_up = prediction.signal == "UP"
@@ -1531,10 +1698,15 @@ def render_prediction_card(
             f"시장 심리 필터: `{market_context['score']:.1f}`점 / `{market_context['status']}` "
             f"(기준일: {market_context['date']})"
         )
+    if performance_context is not None:
+        st.caption(
+            f"누적 성능 참고: 기록 {performance_context['run_count']}회 / 성능 점수 {performance_context['score']:.3f}"
+        )
 
     action_label, action_tone, action_message, action_reasons = interpret_prediction_action(
         prediction,
         market_context=market_context,
+        performance_context=performance_context,
     )
     if action_tone == "success":
         st.success(f"행동 해석: **{action_label}**\n\n{action_message}")
