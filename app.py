@@ -633,6 +633,11 @@ def render_single_prediction() -> None:
                 "- `무료 트리 모델도 비교`를 켜면 기본 로지스틱 회귀와 트리 모델을 둘 다 테스트한 뒤 더 나은 쪽을 사용합니다.\n"
                 "- 처음엔 `5y`와 자동 추천 켜짐 상태로 보는 것이 가장 무난합니다."
             )
+        apply_market_filter = st.checkbox(
+            "시장 심리 필터 같이 보기",
+            value=True,
+            help="한국 공포탐욕 지수를 함께 읽어서, 과열/과매도 구간에서는 예측 해석을 조금 더 보수적이거나 역발상 관점으로 조정합니다.",
+        )
         run = st.button("예측 실행", type="primary", use_container_width=True)
 
     with right:
@@ -646,7 +651,19 @@ def render_single_prediction() -> None:
                     optimize_threshold=auto_threshold,
                     compare_tree_model=compare_tree_model,
                 )
-            render_prediction_card(prediction)
+            market_context = None
+            if apply_market_filter:
+                try:
+                    fear_greed = load_fear_greed_data()
+                    current = fear_greed.summary.iloc[0]
+                    market_context = {
+                        "score": float(current["score"]),
+                        "status": str(current["status"]),
+                        "date": str(fear_greed.latest_date),
+                    }
+                except Exception:
+                    market_context = None
+            render_prediction_card(prediction, market_context=market_context)
         else:
             render_latest_csv_preview("outputs", "predictions.csv", key_prefix="single_prediction_latest")
 
@@ -1348,7 +1365,10 @@ def render_prediction_backtest(prediction: Prediction) -> None:
         st.dataframe(recent_frame, use_container_width=True, hide_index=True)
 
 
-def interpret_prediction_action(prediction: Prediction) -> tuple[str, str, str, list[str]]:
+def interpret_prediction_action(
+    prediction: Prediction,
+    market_context: dict[str, Any] | None = None,
+) -> tuple[str, str, str, list[str]]:
     metrics = prediction.metrics
     probability_up = float(prediction.probability_up)
     probability_down = float(prediction.probability_down)
@@ -1370,8 +1390,19 @@ def interpret_prediction_action(prediction: Prediction) -> tuple[str, str, str, 
         )
     if hit_rate is not None:
         reasons.append(f"최근 상승 신호 적중률 {hit_rate:.1%}")
+    market_score = None if market_context is None else float(market_context["score"])
+    market_status = None if market_context is None else str(market_context["status"])
+    if market_score is not None and market_status is not None:
+        reasons.append(f"현재 시장 심리 {market_score:.1f}점 ({market_status})")
 
     if prediction.signal == "DOWN":
+        if market_score is not None and market_score <= 25:
+            return (
+                "과매도 구간 관망",
+                "info",
+                "모델은 하락 우세로 보지만 시장 심리가 이미 극단적 공포 구간입니다. 추가 하락 추종보다는 반등 가능성까지 함께 보며 신중하게 해석하는 편이 좋습니다.",
+                reasons,
+            )
         if confidence_gap < 0.06:
             return (
                 "관망",
@@ -1391,6 +1422,22 @@ def interpret_prediction_action(prediction: Prediction) -> tuple[str, str, str, 
             "참고용 신호",
             "warning",
             "상승 신호는 나왔지만 최근 검증 성적이 단순 기준보다 약합니다. 바로 의사결정에 쓰기보다 참고용으로 보는 편이 안전합니다.",
+            reasons,
+        )
+
+    if market_score is not None and market_score >= 75 and probability_up < 0.62:
+        return (
+            "신중한 관심",
+            "warning",
+            "상승 신호는 있지만 시장 심리가 이미 탐욕 구간입니다. 추격 매수보다는 눌림이나 추가 근거를 함께 확인하는 해석이 더 좋습니다.",
+            reasons,
+        )
+
+    if market_score is not None and market_score <= 25 and probability_up >= 0.57:
+        return (
+            "역발상 관심 후보",
+            "success",
+            "상승 신호에 더해 시장 심리가 극단적 공포 구간입니다. 반등 후보 관점에서 우선 체크해볼 만합니다.",
             reasons,
         )
 
@@ -1418,7 +1465,10 @@ def interpret_prediction_action(prediction: Prediction) -> tuple[str, str, str, 
     )
 
 
-def render_prediction_card(prediction: Prediction) -> None:
+def render_prediction_card(
+    prediction: Prediction,
+    market_context: dict[str, Any] | None = None,
+) -> None:
     metrics = prediction.metrics
     signal_is_up = prediction.signal == "UP"
     signal_label = "상승 우세" if signal_is_up else "하락 우세"
@@ -1441,8 +1491,16 @@ def render_prediction_card(prediction: Prediction) -> None:
             f"무료 모델 비교 결과: `{prediction.model_label}` 선택 "
             f"(비교 기준: {model_basis_label(prediction.model_selection_basis)}, 개선폭: {selected_edge:+.2%}p)"
         )
+    if market_context is not None:
+        st.caption(
+            f"시장 심리 필터: `{market_context['score']:.1f}`점 / `{market_context['status']}` "
+            f"(기준일: {market_context['date']})"
+        )
 
-    action_label, action_tone, action_message, action_reasons = interpret_prediction_action(prediction)
+    action_label, action_tone, action_message, action_reasons = interpret_prediction_action(
+        prediction,
+        market_context=market_context,
+    )
     if action_tone == "success":
         st.success(f"행동 해석: **{action_label}**\n\n{action_message}")
     elif action_tone == "warning":
