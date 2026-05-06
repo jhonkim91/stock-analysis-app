@@ -174,7 +174,8 @@ def render_dashboard() -> None:
         if top_frame.empty:
             st.info("아직 저장된 상승확률 결과가 없습니다. `3. 상승확률 Top`을 한 번 실행하면 여기서 바로 볼 수 있습니다.")
         else:
-            render_dashboard_hero_pick(top_frame, user_id=user_id)
+            valuation_map = load_dashboard_valuation_map(user_id)
+            render_dashboard_hero_pick(top_frame, user_id=user_id, valuation_map=valuation_map)
             render_dashboard_signal_sections(top_frame, user_id=user_id)
 
         st.markdown("**등록된 관심종목**")
@@ -251,6 +252,34 @@ def load_dashboard_watchlist(user_id: str) -> pd.DataFrame:
     return frame
 
 
+def load_dashboard_valuation_map(user_id: str) -> dict[str, dict[str, Any]]:
+    latest_valuation = latest_file(user_outputs_dir(user_id) / "target_market_cap", "top*.csv")
+    if latest_valuation is None:
+        latest_valuation = latest_file(user_outputs_dir(user_id) / "target_market_cap", "valuations.csv")
+    if latest_valuation is None or not latest_valuation.exists():
+        return {}
+
+    try:
+        frame = pd.read_csv(latest_valuation)
+    except Exception:
+        return {}
+    if frame.empty or "ticker" not in frame.columns:
+        return {}
+
+    valuation_map: dict[str, dict[str, Any]] = {}
+    for _, row in frame.iterrows():
+        ticker = str(row.get("ticker") or "").strip()
+        if not ticker:
+            continue
+        valuation_map[ticker] = {
+            "target_price": pd.to_numeric(row.get("target_price"), errors="coerce"),
+            "current_price": pd.to_numeric(row.get("current_price"), errors="coerce"),
+            "upside": pd.to_numeric(row.get("upside"), errors="coerce"),
+            "currency": str(row.get("currency") or ""),
+        }
+    return valuation_map
+
+
 def render_dashboard_top_cards(frame: pd.DataFrame) -> None:
     rows = frame.reset_index(drop=True).to_dict(orient="records")
     for start in range(0, len(rows), 2):
@@ -303,7 +332,12 @@ def render_dashboard_briefing(frame: pd.DataFrame) -> None:
     )
 
 
-def render_dashboard_hero_pick(frame: pd.DataFrame, *, user_id: str) -> None:
+def render_dashboard_hero_pick(
+    frame: pd.DataFrame,
+    *,
+    user_id: str,
+    valuation_map: dict[str, dict[str, Any]] | None = None,
+) -> None:
     rows = frame.reset_index(drop=True).to_dict(orient="records")
     recommendation_rows = [row for row in rows if classify_dashboard_signal(row)[0] == "오늘의 추천"]
     if not recommendation_rows:
@@ -320,6 +354,7 @@ def render_dashboard_hero_pick(frame: pd.DataFrame, *, user_id: str) -> None:
     close_raw = pd.to_numeric(hero.get("종가"), errors="coerce")
     close_label = f"{close_raw:,.0f}" if pd.notna(close_raw) else "-"
     profile = get_ticker_setting_profile_context(ticker, user_id)
+    valuation = (valuation_map or {}).get(ticker)
     reliability_html = ""
     if profile is not None:
         reliability_bg, reliability_fg = reliability_badge(profile.reliability_grade)
@@ -328,6 +363,23 @@ def render_dashboard_hero_pick(frame: pd.DataFrame, *, user_id: str) -> None:
             f"background:{reliability_bg}; color:{reliability_fg}; font-size:0.82rem; font-weight:700;'>"
             f"신뢰도 {profile.reliability_grade}</span>"
         )
+    valuation_html = ""
+    if valuation is not None:
+        target_price = valuation.get("target_price")
+        upside = valuation.get("upside")
+        if pd.notna(target_price) and pd.notna(upside):
+            valuation_html = (
+                "<div style='display:grid; grid-template-columns:1fr 1fr; gap:10px; margin:0.85rem 0 0.7rem 0;'>"
+                "<div style='border:1px solid #d1fae5; background:#ffffff; border-radius:14px; padding:12px 14px;'>"
+                "<div style='font-size:0.78rem; color:#64748b; margin-bottom:0.28rem;'>목표주가</div>"
+                f"<div style='font-size:1.05rem; font-weight:800; color:#0f172a;'>{float(target_price):,.0f}</div>"
+                "</div>"
+                "<div style='border:1px solid #d1fae5; background:#ffffff; border-radius:14px; padding:12px 14px;'>"
+                "<div style='font-size:0.78rem; color:#64748b; margin-bottom:0.28rem;'>목표가 대비 상승여력</div>"
+                f"<div style='font-size:1.05rem; font-weight:800; color:#166534;'>{float(upside):.1%}</div>"
+                "</div>"
+                "</div>"
+            )
 
     st.markdown(
         "<div style='border:1px solid #bbf7d0; background:linear-gradient(135deg, #f0fdf4 0%, #ecfeff 100%); "
@@ -345,6 +397,7 @@ def render_dashboard_hero_pick(frame: pd.DataFrame, *, user_id: str) -> None:
         f"<span style='display:inline-block; padding:0.24rem 0.62rem; border-radius:999px; background:#ffffff; color:#0f172a; border:1px solid #d1fae5; font-size:0.82rem; font-weight:700;'>{strength_label}</span>"
         f"{reliability_html}"
         "</div>"
+        f"{valuation_html}"
         f"<div style='font-size:0.88rem; color:#334155;'>{strength_detail}</div>"
         "</div>",
         unsafe_allow_html=True,
