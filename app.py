@@ -186,7 +186,12 @@ def render_dashboard() -> None:
                 valuation_map=valuation_map,
                 fear_greed_data=fear_greed_data,
             )
-            render_dashboard_signal_sections(top_frame, user_id=user_id)
+            render_dashboard_signal_sections(
+                top_frame,
+                user_id=user_id,
+                valuation_map=valuation_map,
+                fear_greed_data=fear_greed_data,
+            )
 
         st.markdown("**등록된 관심종목**")
         watchlist_frame = load_dashboard_watchlist(user_id)
@@ -398,6 +403,7 @@ def render_dashboard_hero_pick(
         profile=profile,
         valuation=valuation,
         fear_greed_data=fear_greed_data,
+        max_parts=3,
     )
 
     st.markdown(
@@ -427,7 +433,13 @@ def render_dashboard_hero_pick(
         st.rerun()
 
 
-def render_dashboard_signal_sections(frame: pd.DataFrame, *, user_id: str) -> None:
+def render_dashboard_signal_sections(
+    frame: pd.DataFrame,
+    *,
+    user_id: str,
+    valuation_map: dict[str, dict[str, Any]] | None = None,
+    fear_greed_data: Any | None = None,
+) -> None:
     section_order = [
         ("오늘의 추천", "지금 가장 먼저 볼 만한 후보", "#166534"),
         ("관망", "애매해서 한 번 더 확인할 후보", "#92400e"),
@@ -460,7 +472,13 @@ def render_dashboard_signal_sections(frame: pd.DataFrame, *, user_id: str) -> No
             columns = st.columns(2, gap="medium")
             for column, row in zip(columns, section_rows[start : start + 2]):
                 with column:
-                    render_dashboard_top_card(row, section_name=section_name, user_id=user_id)
+                    render_dashboard_top_card(
+                        row,
+                        section_name=section_name,
+                        user_id=user_id,
+                        valuation_map=valuation_map,
+                        fear_greed_data=fear_greed_data,
+                    )
         st.markdown("<div style='height:0.35rem;'></div>", unsafe_allow_html=True)
 
 
@@ -471,6 +489,7 @@ def build_dashboard_hero_summary(
     profile: Any | None,
     valuation: dict[str, Any] | None,
     fear_greed_data: Any | None,
+    max_parts: int = 3,
 ) -> str:
     parts: list[str] = []
 
@@ -523,7 +542,7 @@ def build_dashboard_hero_summary(
         except Exception:
             pass
 
-    return " ".join(parts[:3])
+    return " ".join(parts[:max_parts])
 
 
 def render_dashboard_watchlist_cards(frame: pd.DataFrame) -> None:
@@ -577,6 +596,8 @@ def render_dashboard_top_card(
     *,
     section_name: str | None = None,
     user_id: str | None = None,
+    valuation_map: dict[str, dict[str, Any]] | None = None,
+    fear_greed_data: Any | None = None,
 ) -> None:
     name = str(row.get("종목명") or row.get("종목코드") or "-")
     ticker = str(row.get("종목코드") or "-")
@@ -592,6 +613,7 @@ def render_dashboard_top_card(
         "#86efac" if section_name == "오늘의 추천" else "#fcd34d" if section_name == "관망" else "#fca5a5"
     )
     profile = get_ticker_setting_profile_context(ticker, user_id) if user_id else None
+    valuation = (valuation_map or {}).get(ticker)
     reliability_html = ""
     if profile is not None:
         reliability_bg, reliability_fg = reliability_badge(profile.reliability_grade)
@@ -600,6 +622,14 @@ def render_dashboard_top_card(
             f"background:{reliability_bg}; color:{reliability_fg}; font-size:0.76rem; font-weight:700;'>"
             f"신뢰도 {profile.reliability_grade}</span>"
         )
+    card_summary = build_dashboard_hero_summary(
+        probability=float(probability_raw) if pd.notna(probability_raw) else None,
+        strength_detail="",
+        profile=profile,
+        valuation=valuation,
+        fear_greed_data=fear_greed_data,
+        max_parts=2,
+    )
 
     with st.container(border=True):
         st.markdown(
@@ -627,6 +657,7 @@ def render_dashboard_top_card(
         metric_left, metric_right = st.columns(2)
         metric_left.metric("상승확률", probability_label)
         metric_right.metric("판단", signal)
+        st.caption(card_summary)
         st.markdown(
             f"<div style='color:{accent_color}; font-size:0.95rem; font-weight:600;'>최근 종가 {close_label}</div>",
             unsafe_allow_html=True,
