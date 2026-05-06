@@ -176,10 +176,11 @@ def render_dashboard() -> None:
     with left:
         st.markdown("**오늘의 판단 보드**")
         top_frame = load_dashboard_top_probability(user_id)
+        valuation_map = load_dashboard_valuation_map(user_id)
+        watchlist_prediction_map = load_dashboard_watchlist_prediction_map(user_id)
         if top_frame.empty:
             st.info("아직 저장된 상승확률 결과가 없습니다. `3. 상승확률 Top`을 한 번 실행하면 여기서 바로 볼 수 있습니다.")
         else:
-            valuation_map = load_dashboard_valuation_map(user_id)
             render_dashboard_hero_pick(
                 top_frame,
                 user_id=user_id,
@@ -198,7 +199,13 @@ def render_dashboard() -> None:
         if watchlist_frame.empty:
             st.info("등록된 관심종목이 없습니다. `2. 관심종목` 탭에서 검색해서 추가해보세요.")
         else:
-            render_dashboard_watchlist_cards(watchlist_frame)
+            render_dashboard_watchlist_cards(
+                watchlist_frame,
+                user_id=user_id,
+                prediction_map=watchlist_prediction_map,
+                valuation_map=valuation_map,
+                fear_greed_data=fear_greed_data,
+            )
 
     with right:
         st.markdown("**공포탐욕 지수**")
@@ -293,6 +300,32 @@ def load_dashboard_valuation_map(user_id: str) -> dict[str, dict[str, Any]]:
             "currency": str(row.get("currency") or ""),
         }
     return valuation_map
+
+
+def load_dashboard_watchlist_prediction_map(user_id: str) -> dict[str, dict[str, Any]]:
+    latest_predictions = latest_file(user_outputs_dir(user_id) / "watchlist_runs", "predictions.csv")
+    if latest_predictions is None or not latest_predictions.exists():
+        return {}
+
+    try:
+        frame = pd.read_csv(latest_predictions)
+    except Exception:
+        return {}
+    if frame.empty or "ticker" not in frame.columns:
+        return {}
+
+    prediction_map: dict[str, dict[str, Any]] = {}
+    for _, row in frame.iterrows():
+        ticker = str(row.get("ticker") or "").strip()
+        if not ticker:
+            continue
+        prediction_map[ticker] = {
+            "signal": str(row.get("signal") or "").strip(),
+            "probability_up": pd.to_numeric(row.get("probability_up"), errors="coerce"),
+            "latest_close": pd.to_numeric(row.get("latest_close"), errors="coerce"),
+            "status": str(row.get("status") or "").strip(),
+        }
+    return prediction_map
 
 
 def render_dashboard_top_cards(frame: pd.DataFrame) -> None:
@@ -545,7 +578,14 @@ def build_dashboard_hero_summary(
     return " ".join(parts[:max_parts])
 
 
-def render_dashboard_watchlist_cards(frame: pd.DataFrame) -> None:
+def render_dashboard_watchlist_cards(
+    frame: pd.DataFrame,
+    *,
+    user_id: str,
+    prediction_map: dict[str, dict[str, Any]] | None = None,
+    valuation_map: dict[str, dict[str, Any]] | None = None,
+    fear_greed_data: Any | None = None,
+) -> None:
     rows = frame.reset_index(drop=True).to_dict(orient="records")
     total = len(rows)
     us_count = sum(1 for row in rows if str(row.get("거래소") or "-") in {"-", ""})
@@ -560,13 +600,26 @@ def render_dashboard_watchlist_cards(frame: pd.DataFrame) -> None:
         columns = st.columns(2, gap="medium")
         for column, row in zip(columns, rows[start : start + 2]):
             with column:
-                render_dashboard_watchlist_card(row)
+                render_dashboard_watchlist_card(
+                    row,
+                    user_id=user_id,
+                    prediction_map=prediction_map,
+                    valuation_map=valuation_map,
+                    fear_greed_data=fear_greed_data,
+                )
 
     if total > 8:
         st.caption(f"외 {total - 8}개 종목은 `2. 관심종목` 탭에서 계속 볼 수 있습니다.")
 
 
-def render_dashboard_watchlist_card(row: dict[str, Any]) -> None:
+def render_dashboard_watchlist_card(
+    row: dict[str, Any],
+    *,
+    user_id: str,
+    prediction_map: dict[str, dict[str, Any]] | None = None,
+    valuation_map: dict[str, dict[str, Any]] | None = None,
+    fear_greed_data: Any | None = None,
+) -> None:
     name = str(row.get("종목명") or row.get("종목코드") or "-")
     ticker = str(row.get("종목코드") or "-")
     exchange = str(row.get("거래소") or "-")
@@ -574,6 +627,38 @@ def render_dashboard_watchlist_card(row: dict[str, Any]) -> None:
     badge_bg = "#dbeafe" if is_domestic else "#ede9fe"
     badge_fg = "#1d4ed8" if is_domestic else "#6d28d9"
     badge_label = exchange if is_domestic else "US/Global"
+    prediction = (prediction_map or {}).get(ticker)
+    valuation = (valuation_map or {}).get(ticker)
+    profile = get_ticker_setting_profile_context(ticker, user_id)
+    probability = None
+    signal = "-"
+    signal_label = "미실행"
+    signal_badge_bg = "#e2e8f0"
+    signal_badge_fg = "#334155"
+    close_label = "-"
+    if prediction is not None:
+        probability = pd.to_numeric(prediction.get("probability_up"), errors="coerce")
+        signal = str(prediction.get("signal") or "-")
+        signal_label, _, signal_badge_bg, signal_badge_fg = dashboard_signal_style(signal)
+        latest_close = pd.to_numeric(prediction.get("latest_close"), errors="coerce")
+        if pd.notna(latest_close):
+            close_label = f"{float(latest_close):,.0f}"
+    reliability_html = ""
+    if profile is not None:
+        reliability_bg, reliability_fg = reliability_badge(profile.reliability_grade)
+        reliability_html = (
+            f"<span style='display:inline-block; padding:0.18rem 0.52rem; border-radius:999px; "
+            f"background:{reliability_bg}; color:{reliability_fg}; font-size:0.76rem; font-weight:700;'>"
+            f"신뢰도 {profile.reliability_grade}</span>"
+        )
+    summary = build_dashboard_hero_summary(
+        probability=float(probability) if probability is not None and pd.notna(probability) else None,
+        strength_detail="",
+        profile=profile,
+        valuation=valuation,
+        fear_greed_data=fear_greed_data,
+        max_parts=2,
+    )
 
     with st.container(border=True):
         st.markdown(
@@ -586,6 +671,24 @@ def render_dashboard_watchlist_card(row: dict[str, Any]) -> None:
         )
         st.caption(ticker)
         st.markdown(f"**{name}**")
+        st.markdown(
+            (
+                f"<div style='display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:0.15rem 0 0.55rem 0;'>"
+                f"<span style='display:inline-block; padding:0.2rem 0.55rem; border-radius:999px; "
+                f"background:{signal_badge_bg}; color:{signal_badge_fg}; font-size:0.82rem; font-weight:600;'>{signal_label}</span>"
+                f"{reliability_html}"
+                f"</div>"
+            ),
+            unsafe_allow_html=True,
+        )
+        st.caption(summary if summary else "아직 최근 예측이 없어 먼저 실행해보는 편이 좋습니다.")
+        metric_left, metric_right = st.columns(2)
+        metric_left.metric("최근 판단", signal)
+        metric_right.metric("상승확률", f"{float(probability):.1%}" if probability is not None and pd.notna(probability) else "-")
+        st.markdown(
+            f"<div style='color:#475569; font-size:0.92rem; font-weight:600;'>최근 종가 {close_label}</div>",
+            unsafe_allow_html=True,
+        )
         if st.button("단일 예측 열기", key=f"watch_open_{ticker}", use_container_width=True):
             queue_single_prediction_target(ticker)
             st.rerun()
