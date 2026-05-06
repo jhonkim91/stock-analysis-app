@@ -15,6 +15,9 @@ class SettingProfile:
     run_count: int
     recency_weight_sum: float
     latest_run_at: str | None
+    reliability_grade: str
+    reliability_label: str
+    reliability_score: float
     preferred_threshold: float | None
     preferred_model_name: str | None
     preferred_model_label: str | None
@@ -70,6 +73,12 @@ def build_setting_profiles(base_dir: str | Path, *, min_records: int = 2) -> lis
         avg_strategy_return = weighted_mean_or_none(group, "backtest_cumulative_strategy_return")
         latest_run_at = _latest_run_at(group)
         recency_weight_sum = float(group["recency_weight"].sum()) if "recency_weight" in group.columns else float(run_count)
+        reliability_score, reliability_grade, reliability_label = _reliability_grade(
+            run_count=run_count,
+            avg_hit_rate=avg_hit_rate,
+            avg_walk_forward_edge=avg_walk_forward_edge,
+            avg_strategy_return=avg_strategy_return,
+        )
 
         profiles.append(
             SettingProfile(
@@ -77,6 +86,9 @@ def build_setting_profiles(base_dir: str | Path, *, min_records: int = 2) -> lis
                 run_count=run_count,
                 recency_weight_sum=recency_weight_sum,
                 latest_run_at=latest_run_at,
+                reliability_grade=reliability_grade,
+                reliability_label=reliability_label,
+                reliability_score=reliability_score,
                 preferred_threshold=preferred_threshold,
                 preferred_model_name=preferred_model_name,
                 preferred_model_label=preferred_model_label,
@@ -189,3 +201,27 @@ def _latest_run_at(frame: pd.DataFrame) -> str | None:
     if isinstance(latest, datetime):
         return latest.isoformat()
     return str(latest)
+
+
+def _reliability_grade(
+    *,
+    run_count: int,
+    avg_hit_rate: float | None,
+    avg_walk_forward_edge: float | None,
+    avg_strategy_return: float | None,
+) -> tuple[float, str, str]:
+    hit_rate_component = 0.0 if avg_hit_rate is None else max(0.0, min((avg_hit_rate - 0.45) / 0.15, 1.0))
+    wf_component = 0.0 if avg_walk_forward_edge is None else max(0.0, min(avg_walk_forward_edge / 0.05, 1.0))
+    strategy_component = 0.0 if avg_strategy_return is None else max(0.0, min(avg_strategy_return / 0.25, 1.0))
+    depth_component = min(run_count / 8.0, 1.0)
+    score = (
+        0.40 * hit_rate_component
+        + 0.30 * wf_component
+        + 0.20 * strategy_component
+        + 0.10 * depth_component
+    )
+    if run_count >= 4 and score >= 0.67:
+        return (score, "A", "신뢰 높음")
+    if run_count >= 2 and score >= 0.34:
+        return (score, "B", "신뢰 보통")
+    return (score, "C", "신뢰 주의")

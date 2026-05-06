@@ -612,10 +612,17 @@ def render_single_prediction() -> None:
         except Exception:
             guessed_profile = None
         if guessed_profile is not None:
+            badge_bg, badge_fg = reliability_badge(guessed_profile.reliability_grade)
             st.caption(
                 f"최근 기록 가중 추천 설정: 기준값 {guessed_profile.preferred_threshold or 0.5:.2f}"
                 f" / 모델 {guessed_profile.preferred_model_label or guessed_profile.preferred_model_name or '-'}"
                 f" / 기록 {guessed_profile.run_count}회"
+            )
+            st.markdown(
+                f"<span style='display:inline-block; padding:0.2rem 0.55rem; border-radius:999px; "
+                f"background:{badge_bg}; color:{badge_fg}; font-size:0.82rem; font-weight:700;'>"
+                f"신뢰도 {guessed_profile.reliability_grade} · {guessed_profile.reliability_label}</span>",
+                unsafe_allow_html=True,
             )
         period = st.selectbox(
             "조회기간",
@@ -1024,6 +1031,10 @@ def build_performance_leaderboard(user_id: str | None = None, *, min_records: in
         return pd.DataFrame()
 
     all_rows = pd.concat(collected, ignore_index=True)
+    profile_map = {
+        profile.ticker: profile
+        for profile in get_setting_profile_profiles(user_id)
+    }
     leaderboard_rows: list[dict[str, Any]] = []
     for ticker, group in all_rows.groupby("ticker", dropna=True):
         run_count = int(len(group))
@@ -1043,11 +1054,14 @@ def build_performance_leaderboard(user_id: str | None = None, *, min_records: in
             + (0.20 * max(0.0, 0.0 if pd.isna(avg_strategy_return) else avg_strategy_return))
             + (0.05 * min(run_count / 10, 1.0))
         )
+        profile = profile_map.get(str(ticker))
         leaderboard_rows.append(
             {
                 "종목명": name,
                 "티커": str(ticker),
                 "기록 수": run_count,
+                "신뢰도": profile.reliability_grade if profile else "C",
+                "신뢰도 설명": profile.reliability_label if profile else "신뢰 주의",
                 "평균 상승확률": avg_probability,
                 "평균 검증 개선폭": avg_accuracy_edge,
                 "평균 WF 개선폭": avg_walk_forward_edge,
@@ -1083,6 +1097,8 @@ def get_ticker_performance_context(ticker: str, user_id: str | None = None) -> d
     return {
         "run_count": int(row["기록 수"]),
         "score": float(row["성능 점수"]),
+        "reliability_grade": str(row["신뢰도"]) if "신뢰도" in row.index else "",
+        "reliability_label": str(row["신뢰도 설명"]) if "신뢰도 설명" in row.index else "",
         "avg_hit_rate": None if pd.isna(row["평균 신호 적중률"]) else float(row["평균 신호 적중률"]),
         "avg_strategy_return": None
         if pd.isna(row["평균 전략 누적수익"])
@@ -1095,6 +1111,15 @@ def get_ticker_performance_context(ticker: str, user_id: str | None = None) -> d
 
 def get_ticker_setting_profile_context(ticker: str, user_id: str | None = None) -> SettingProfile | None:
     return get_setting_profile(performance_base_dir(user_id), ticker, min_records=2)
+
+
+def reliability_badge(grade: str) -> tuple[str, str]:
+    normalized = (grade or "").strip().upper()
+    if normalized == "A":
+        return ("#dcfce7", "#166534")
+    if normalized == "B":
+        return ("#fef3c7", "#92400e")
+    return ("#fee2e2", "#991b1b")
 
 
 def render_performance_leaderboard(user_id: str | None = None) -> None:
@@ -1137,6 +1162,9 @@ def render_setting_profiles_summary(user_id: str | None = None) -> None:
             "run_count": "기록 수",
             "recency_weight_sum": "가중 기록 합",
             "latest_run_at": "최신 기록 시각",
+            "reliability_grade": "신뢰도",
+            "reliability_label": "신뢰도 설명",
+            "reliability_score": "신뢰도 점수",
             "preferred_threshold": "추천 threshold",
             "preferred_model_name": "추천 모델 key",
             "preferred_model_label": "추천 모델",
@@ -1640,6 +1668,10 @@ def interpret_prediction_action(
         reasons.append(
             f"누적 성능 기록 {performance_context['run_count']}회, 성능 점수 {performance_context['score']:.3f}"
         )
+        if performance_context.get("reliability_grade"):
+            reasons.append(
+                f"누적 신뢰도 {performance_context['reliability_grade']} ({performance_context.get('reliability_label') or '-'})"
+            )
         if performance_context["avg_hit_rate"] is not None:
             reasons.append(f"누적 평균 신호 적중률 {performance_context['avg_hit_rate']:.1%}")
         if performance_context["avg_walk_forward_edge"] is not None:
@@ -1776,6 +1808,14 @@ def render_prediction_card(
         st.caption(
             f"누적 성능 참고: 기록 {performance_context['run_count']}회 / 성능 점수 {performance_context['score']:.3f}"
         )
+        if performance_context.get("reliability_grade"):
+            badge_bg, badge_fg = reliability_badge(performance_context["reliability_grade"])
+            st.markdown(
+                f"<span style='display:inline-block; padding:0.2rem 0.55rem; border-radius:999px; "
+                f"background:{badge_bg}; color:{badge_fg}; font-size:0.82rem; font-weight:700;'>"
+                f"신뢰도 {performance_context['reliability_grade']} · {performance_context.get('reliability_label') or ''}</span>",
+                unsafe_allow_html=True,
+            )
     if setting_profile_context is not None:
         threshold_label = (
             f"{setting_profile_context.preferred_threshold:.2f}"
