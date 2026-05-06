@@ -686,6 +686,24 @@ def render_dashboard_watchlist_card(
             f"background:{reliability_bg}; color:{reliability_fg}; font-size:0.76rem; font-weight:700;'>"
             f"신뢰도 {profile.reliability_grade}</span>"
         )
+    upside_html = ""
+    if valuation is not None:
+        upside = pd.to_numeric(valuation.get("upside"), errors="coerce")
+        if pd.notna(upside):
+            upside_value = float(upside)
+            if upside_value >= 0.2:
+                upside_bg, upside_fg = "#dcfce7", "#166534"
+            elif upside_value >= 0.08:
+                upside_bg, upside_fg = "#ecfccb", "#3f6212"
+            elif upside_value >= 0:
+                upside_bg, upside_fg = "#fef3c7", "#92400e"
+            else:
+                upside_bg, upside_fg = "#fee2e2", "#991b1b"
+            upside_html = (
+                f"<span style='display:inline-block; padding:0.18rem 0.52rem; border-radius:999px; "
+                f"background:{upside_bg}; color:{upside_fg}; font-size:0.76rem; font-weight:700;'>"
+                f"상승여력 {upside_value:.1%}</span>"
+            )
     summary = build_dashboard_hero_summary(
         probability=float(probability) if probability is not None and pd.notna(probability) else None,
         strength_detail="",
@@ -712,6 +730,7 @@ def render_dashboard_watchlist_card(
                 f"<span style='display:inline-block; padding:0.2rem 0.55rem; border-radius:999px; "
                 f"background:{signal_badge_bg}; color:{signal_badge_fg}; font-size:0.82rem; font-weight:600;'>{signal_label}</span>"
                 f"{reliability_html}"
+                f"{upside_html}"
                 f"</div>"
             ),
             unsafe_allow_html=True,
