@@ -587,6 +587,11 @@ def render_dashboard_watchlist_cards(
     fear_greed_data: Any | None = None,
 ) -> None:
     rows = frame.reset_index(drop=True).to_dict(orient="records")
+    rows = sort_dashboard_watchlist_rows(
+        rows,
+        user_id=user_id,
+        prediction_map=prediction_map,
+    )
     total = len(rows)
     us_count = sum(1 for row in rows if str(row.get("거래소") or "-") in {"-", ""})
     kr_count = total - us_count
@@ -610,6 +615,36 @@ def render_dashboard_watchlist_cards(
 
     if total > 8:
         st.caption(f"외 {total - 8}개 종목은 `2. 관심종목` 탭에서 계속 볼 수 있습니다.")
+
+
+def sort_dashboard_watchlist_rows(
+    rows: list[dict[str, Any]],
+    *,
+    user_id: str,
+    prediction_map: dict[str, dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    grade_rank = {"A": 3, "B": 2, "C": 1}
+
+    def sort_key(row: dict[str, Any]) -> tuple[float, float, float, str]:
+        ticker = str(row.get("종목코드") or "").strip()
+        prediction = (prediction_map or {}).get(ticker)
+        profile = get_ticker_setting_profile_context(ticker, user_id)
+
+        has_prediction = 1.0 if prediction is not None and str(prediction.get("status") or "").strip().lower() == "success" else 0.0
+        reliability_score = 0.0
+        if profile is not None:
+            reliability_score = float(getattr(profile, "reliability_score", 0.0) or 0.0)
+            reliability_score += grade_rank.get(str(profile.reliability_grade or "").strip().upper(), 0) * 100.0
+
+        probability = 0.0
+        if prediction is not None:
+            parsed_probability = pd.to_numeric(prediction.get("probability_up"), errors="coerce")
+            if pd.notna(parsed_probability):
+                probability = float(parsed_probability)
+
+        return (-has_prediction, -reliability_score, -probability, ticker)
+
+    return sorted(rows, key=sort_key)
 
 
 def render_dashboard_watchlist_card(
