@@ -174,6 +174,7 @@ def render_dashboard() -> None:
         if top_frame.empty:
             st.info("아직 저장된 상승확률 결과가 없습니다. `3. 상승확률 Top`을 한 번 실행하면 여기서 바로 볼 수 있습니다.")
         else:
+            render_dashboard_hero_pick(top_frame, user_id=user_id)
             render_dashboard_signal_sections(top_frame, user_id=user_id)
 
         st.markdown("**등록된 관심종목**")
@@ -300,6 +301,57 @@ def render_dashboard_briefing(frame: pd.DataFrame) -> None:
         "</div>",
         unsafe_allow_html=True,
     )
+
+
+def render_dashboard_hero_pick(frame: pd.DataFrame, *, user_id: str) -> None:
+    rows = frame.reset_index(drop=True).to_dict(orient="records")
+    recommendation_rows = [row for row in rows if classify_dashboard_signal(row)[0] == "오늘의 추천"]
+    if not recommendation_rows:
+        return
+
+    hero = recommendation_rows[0]
+    ticker = str(hero.get("종목코드") or "-")
+    name = str(hero.get("종목명") or ticker)
+    probability_raw = pd.to_numeric(hero.get("상승확률"), errors="coerce")
+    probability_label = f"{probability_raw:.1%}" if pd.notna(probability_raw) else "-"
+    signal = str(hero.get("판단") or "-")
+    signal_label, _, badge_bg, badge_fg = dashboard_signal_style(signal)
+    strength_label, strength_detail = describe_prediction_strength(float(probability_raw) if pd.notna(probability_raw) else 0.5)
+    close_raw = pd.to_numeric(hero.get("종가"), errors="coerce")
+    close_label = f"{close_raw:,.0f}" if pd.notna(close_raw) else "-"
+    profile = get_ticker_setting_profile_context(ticker, user_id)
+    reliability_html = ""
+    if profile is not None:
+        reliability_bg, reliability_fg = reliability_badge(profile.reliability_grade)
+        reliability_html = (
+            f"<span style='display:inline-block; padding:0.24rem 0.62rem; border-radius:999px; "
+            f"background:{reliability_bg}; color:{reliability_fg}; font-size:0.82rem; font-weight:700;'>"
+            f"신뢰도 {profile.reliability_grade}</span>"
+        )
+
+    st.markdown(
+        "<div style='border:1px solid #bbf7d0; background:linear-gradient(135deg, #f0fdf4 0%, #ecfeff 100%); "
+        "border-radius:18px; padding:18px 18px 16px 18px; margin:0.1rem 0 1rem 0;'>"
+        "<div style='display:flex; justify-content:space-between; gap:12px; align-items:flex-start;'>"
+        "<div>"
+        "<div style='font-size:0.8rem; color:#166534; font-weight:700; margin-bottom:0.35rem;'>오늘의 추천 1위</div>"
+        f"<div style='font-size:1.4rem; font-weight:900; color:#0f172a; margin-bottom:0.18rem;'>{name}</div>"
+        f"<div style='font-size:0.88rem; color:#64748b;'>{ticker} · 최근 종가 {close_label}</div>"
+        "</div>"
+        f"<div style='font-size:2rem; font-weight:900; color:#166534; line-height:1;'>{probability_label}</div>"
+        "</div>"
+        f"<div style='display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:0.9rem 0 0.65rem 0;'>"
+        f"<span style='display:inline-block; padding:0.24rem 0.62rem; border-radius:999px; background:{badge_bg}; color:{badge_fg}; font-size:0.82rem; font-weight:700;'>{signal_label}</span>"
+        f"<span style='display:inline-block; padding:0.24rem 0.62rem; border-radius:999px; background:#ffffff; color:#0f172a; border:1px solid #d1fae5; font-size:0.82rem; font-weight:700;'>{strength_label}</span>"
+        f"{reliability_html}"
+        "</div>"
+        f"<div style='font-size:0.88rem; color:#334155;'>{strength_detail}</div>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+    if st.button("이 종목 단일 예측 열기", key=f"hero_open_{ticker}", use_container_width=True):
+        queue_single_prediction_target(ticker)
+        st.rerun()
 
 
 def render_dashboard_signal_sections(frame: pd.DataFrame, *, user_id: str) -> None:
