@@ -380,6 +380,9 @@ def render_dashboard_watchlist_card(row: dict[str, Any]) -> None:
         )
         st.caption(ticker)
         st.markdown(f"**{name}**")
+        if st.button("단일 예측 열기", key=f"watch_open_{ticker}", use_container_width=True):
+            queue_single_prediction_target(ticker)
+            st.rerun()
 
 
 def render_dashboard_top_card(
@@ -441,6 +444,9 @@ def render_dashboard_top_card(
             f"<div style='color:{accent_color}; font-size:0.95rem; font-weight:600;'>최근 종가 {close_label}</div>",
             unsafe_allow_html=True,
         )
+        if st.button("단일 예측 열기", key=f"top_open_{section_name}_{ticker}", use_container_width=True):
+            queue_single_prediction_target(ticker)
+            st.rerun()
 
 
 def dashboard_signal_style(signal: str) -> tuple[str, str, str, str]:
@@ -744,8 +750,16 @@ def render_sidebar() -> None:
 
 
 def render_single_prediction() -> None:
+    pending_ticker = st.session_state.pop("dashboard_single_pred_ticker", None)
+    if pending_ticker:
+        st.session_state["single_pred_ticker"] = pending_ticker
+        st.session_state["single_pred_autofill_notice"] = pending_ticker
+
     left, right = st.columns([0.35, 0.65], gap="large")
     with left:
+        if st.session_state.get("single_pred_autofill_notice"):
+            st.success(f"대시보드에서 `{st.session_state['single_pred_autofill_notice']}` 종목을 가져왔습니다.")
+            st.session_state.pop("single_pred_autofill_notice", None)
         ticker = st.text_input(
             "종목코드/이름",
             value="005930",
@@ -1366,6 +1380,10 @@ def render_results() -> None:
             st.info("저장된 결과가 없습니다.")
         else:
             st.info("현재 사용자에 저장된 결과가 없습니다.")
+
+
+def queue_single_prediction_target(ticker: str) -> None:
+    st.session_state["dashboard_single_pred_ticker"] = str(ticker).strip()
 
 
 def get_supabase_config():
