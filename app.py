@@ -11,7 +11,13 @@ import streamlit as st
 from stock_analysis.auto_runner import run_watchlist
 from stock_analysis.data import normalize_ticker
 from stock_analysis.fear_greed import fetch_fear_greed_data
-from stock_analysis.performance_profiles import SettingProfile, build_setting_profiles, get_setting_profile
+from stock_analysis.performance_profiles import (
+    SettingProfile,
+    build_setting_profiles,
+    get_setting_profile,
+    prepare_prediction_frame,
+    weighted_mean_or_none,
+)
 from stock_analysis.predictor import Prediction, predict_next_day
 from stock_analysis.stock_search import search_stock_candidates
 from stock_analysis.supabase_store import (
@@ -607,7 +613,7 @@ def render_single_prediction() -> None:
             guessed_profile = None
         if guessed_profile is not None:
             st.caption(
-                f"누적 성능 기반 추천 설정: 기준값 {guessed_profile.preferred_threshold or 0.5:.2f}"
+                f"최근 기록 가중 추천 설정: 기준값 {guessed_profile.preferred_threshold or 0.5:.2f}"
                 f" / 모델 {guessed_profile.preferred_model_label or guessed_profile.preferred_model_name or '-'}"
                 f" / 기록 {guessed_profile.run_count}회"
             )
@@ -1008,23 +1014,10 @@ def build_performance_leaderboard(user_id: str | None = None, *, min_records: in
             continue
         if frame.empty or "status" not in frame.columns or "ticker" not in frame.columns:
             continue
-        frame = frame[frame["status"] == "success"].copy()
+        frame = prepare_prediction_frame(frame[frame["status"] == "success"].copy())
         if frame.empty:
             continue
         frame["name"] = frame.get("name", "").fillna("")
-        frame["probability_up"] = pd.to_numeric(frame.get("probability_up"), errors="coerce")
-        frame["accuracy"] = pd.to_numeric(frame.get("accuracy"), errors="coerce")
-        frame["baseline_accuracy"] = pd.to_numeric(frame.get("baseline_accuracy"), errors="coerce")
-        frame["accuracy_edge"] = pd.to_numeric(frame.get("accuracy_edge"), errors="coerce")
-        if frame["accuracy_edge"].isna().all():
-            frame["accuracy_edge"] = frame["accuracy"] - frame["baseline_accuracy"]
-        frame["walk_forward_edge"] = pd.to_numeric(frame.get("walk_forward_edge"), errors="coerce")
-        frame["backtest_hit_rate"] = pd.to_numeric(frame.get("backtest_hit_rate"), errors="coerce")
-        frame["backtest_average_return"] = pd.to_numeric(frame.get("backtest_average_return"), errors="coerce")
-        frame["backtest_cumulative_strategy_return"] = pd.to_numeric(
-            frame.get("backtest_cumulative_strategy_return"),
-            errors="coerce",
-        )
         collected.append(frame)
 
     if not collected:
@@ -1038,17 +1031,12 @@ def build_performance_leaderboard(user_id: str | None = None, *, min_records: in
             continue
         non_empty_names = [value for value in group["name"].astype(str).tolist() if value.strip()]
         name = non_empty_names[0] if non_empty_names else str(ticker)
-        avg_probability = float(group["probability_up"].dropna().mean()) if group["probability_up"].notna().any() else float("nan")
-        avg_accuracy_edge = float(group["accuracy_edge"].dropna().mean()) if group["accuracy_edge"].notna().any() else float("nan")
-        avg_walk_forward_edge = (
-            float(group["walk_forward_edge"].dropna().mean()) if group["walk_forward_edge"].notna().any() else float("nan")
-        )
-        avg_hit_rate = float(group["backtest_hit_rate"].dropna().mean()) if group["backtest_hit_rate"].notna().any() else float("nan")
-        avg_strategy_return = (
-            float(group["backtest_cumulative_strategy_return"].dropna().mean())
-            if group["backtest_cumulative_strategy_return"].notna().any()
-            else float("nan")
-        )
+        avg_probability = weighted_mean_or_none(group, "probability_up")
+        avg_accuracy_edge = weighted_mean_or_none(group, "accuracy_edge")
+        avg_walk_forward_edge = weighted_mean_or_none(group, "walk_forward_edge")
+        avg_hit_rate = weighted_mean_or_none(group, "backtest_hit_rate")
+        avg_strategy_return = weighted_mean_or_none(group, "backtest_cumulative_strategy_return")
+        latest_run = group["run_at_dt"].dropna().max() if "run_at_dt" in group.columns else pd.NaT
         score = (
             (0.45 * (0.0 if pd.isna(avg_hit_rate) else avg_hit_rate))
             + (0.30 * max(0.0, 0.0 if pd.isna(avg_walk_forward_edge) else avg_walk_forward_edge))
@@ -1066,6 +1054,7 @@ def build_performance_leaderboard(user_id: str | None = None, *, min_records: in
                 "평균 신호 적중률": avg_hit_rate,
                 "평균 전략 누적수익": avg_strategy_return,
                 "성능 점수": score,
+                "최신 기록": "" if pd.isna(latest_run) else str(latest_run.date()),
             }
         )
 
@@ -1146,6 +1135,8 @@ def render_setting_profiles_summary(user_id: str | None = None) -> None:
         columns={
             "ticker": "티커",
             "run_count": "기록 수",
+            "recency_weight_sum": "가중 기록 합",
+            "latest_run_at": "최신 기록 시각",
             "preferred_threshold": "추천 threshold",
             "preferred_model_name": "추천 모델 key",
             "preferred_model_label": "추천 모델",
@@ -1156,7 +1147,7 @@ def render_setting_profiles_summary(user_id: str | None = None) -> None:
             "avg_strategy_return": "평균 전략 누적수익",
         }
     )
-    st.caption("같은 종목의 누적 결과를 묶어서, 다음 예측 때 기본값처럼 참고할 설정 요약입니다.")
+    st.caption("같은 종목의 누적 결과를 묶되, 최근 기록일수록 더 크게 반영한 설정 요약입니다.")
     st.dataframe(frame.head(20), use_container_width=True, hide_index=True)
 
 
@@ -1794,6 +1785,7 @@ def render_prediction_card(
         model_label = setting_profile_context.preferred_model_label or setting_profile_context.preferred_model_name or "-"
         st.caption(
             f"추천 설정 프로필: threshold `{threshold_label}` / 선호 모델 `{model_label}`"
+            f" / 최신 가중치 합 `{setting_profile_context.recency_weight_sum:.2f}`"
         )
 
     action_label, action_tone, action_message, action_reasons = interpret_prediction_action(
