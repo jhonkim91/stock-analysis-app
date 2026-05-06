@@ -174,7 +174,7 @@ def render_dashboard() -> None:
         if top_frame.empty:
             st.info("아직 저장된 상승확률 결과가 없습니다. `3. 상승확률 Top`을 한 번 실행하면 여기서 바로 볼 수 있습니다.")
         else:
-            render_dashboard_signal_sections(top_frame)
+            render_dashboard_signal_sections(top_frame, user_id=user_id)
 
         st.markdown("**등록된 관심종목**")
         watchlist_frame = load_dashboard_watchlist(user_id)
@@ -274,12 +274,41 @@ def classify_dashboard_signal(row: dict[str, Any]) -> tuple[str, str, str]:
     return ("관망", "추가 확인", "#fef3c7")
 
 
-def render_dashboard_signal_sections(frame: pd.DataFrame) -> None:
+def render_dashboard_briefing(frame: pd.DataFrame) -> None:
+    rows = frame.reset_index(drop=True).to_dict(orient="records")
+    counts = {"오늘의 추천": 0, "관망": 0, "주의": 0}
+    for row in rows:
+        section_name, _, _ = classify_dashboard_signal(row)
+        counts[section_name] = counts.get(section_name, 0) + 1
+
+    summary_parts = [
+        f"오늘의 추천 {counts['오늘의 추천']}개",
+        f"관망 {counts['관망']}개",
+        f"주의 {counts['주의']}개",
+    ]
+    lead = "오늘은 바로 볼 후보와 한 번 더 확인할 후보가 같이 섞여 있습니다."
+    if counts["오늘의 추천"] >= counts["주의"] + 2:
+        lead = "오늘은 상대적으로 볼 만한 후보가 더 많은 편입니다."
+    elif counts["주의"] >= counts["오늘의 추천"] + 2:
+        lead = "오늘은 주의 구간 후보가 더 많아서 보수적으로 보는 편이 좋습니다."
+
+    st.markdown(
+        "<div style='border:1px solid #e5e7eb; background:#f8fafc; border-radius:14px; padding:14px 16px; margin:0.2rem 0 0.9rem 0;'>"
+        "<div style='font-size:0.82rem; color:#64748b; margin-bottom:0.35rem;'>오늘의 브리핑</div>"
+        f"<div style='font-size:1rem; font-weight:700; color:#0f172a; margin-bottom:0.45rem;'>{lead}</div>"
+        f"<div style='font-size:0.86rem; color:#475569;'>{' · '.join(summary_parts)}</div>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def render_dashboard_signal_sections(frame: pd.DataFrame, *, user_id: str) -> None:
     section_order = [
         ("오늘의 추천", "지금 가장 먼저 볼 만한 후보", "#166534"),
         ("관망", "애매해서 한 번 더 확인할 후보", "#92400e"),
         ("주의", "신호가 약하거나 하락 쪽으로 기운 후보", "#991b1b"),
     ]
+    render_dashboard_briefing(frame)
     rows = frame.reset_index(drop=True).to_dict(orient="records")
     grouped: dict[str, list[dict[str, Any]]] = {name: [] for name, _, _ in section_order}
     for row in rows:
@@ -306,7 +335,7 @@ def render_dashboard_signal_sections(frame: pd.DataFrame) -> None:
             columns = st.columns(2, gap="medium")
             for column, row in zip(columns, section_rows[start : start + 2]):
                 with column:
-                    render_dashboard_top_card(row, section_name=section_name)
+                    render_dashboard_top_card(row, section_name=section_name, user_id=user_id)
         st.markdown("<div style='height:0.35rem;'></div>", unsafe_allow_html=True)
 
 
@@ -353,7 +382,12 @@ def render_dashboard_watchlist_card(row: dict[str, Any]) -> None:
         st.markdown(f"**{name}**")
 
 
-def render_dashboard_top_card(row: dict[str, Any], *, section_name: str | None = None) -> None:
+def render_dashboard_top_card(
+    row: dict[str, Any],
+    *,
+    section_name: str | None = None,
+    user_id: str | None = None,
+) -> None:
     name = str(row.get("종목명") or row.get("종목코드") or "-")
     ticker = str(row.get("종목코드") or "-")
     probability_raw = pd.to_numeric(row.get("상승확률"), errors="coerce")
@@ -367,6 +401,15 @@ def render_dashboard_top_card(row: dict[str, Any], *, section_name: str | None =
     card_border = (
         "#86efac" if section_name == "오늘의 추천" else "#fcd34d" if section_name == "관망" else "#fca5a5"
     )
+    profile = get_ticker_setting_profile_context(ticker, user_id) if user_id else None
+    reliability_html = ""
+    if profile is not None:
+        reliability_bg, reliability_fg = reliability_badge(profile.reliability_grade)
+        reliability_html = (
+            f"<span style='display:inline-block; padding:0.18rem 0.52rem; border-radius:999px; "
+            f"background:{reliability_bg}; color:{reliability_fg}; font-size:0.76rem; font-weight:700;'>"
+            f"신뢰도 {profile.reliability_grade}</span>"
+        )
 
     with st.container(border=True):
         st.markdown(
@@ -386,6 +429,7 @@ def render_dashboard_top_card(row: dict[str, Any], *, section_name: str | None =
                 f"background:{badge_bg}; color:{badge_fg}; font-size:0.82rem; font-weight:600;'>{signal_label}</span>"
                 f"<span style='display:inline-block; padding:0.2rem 0.55rem; border-radius:999px; "
                 f"background:#f3f4f6; color:#111827; font-size:0.82rem; font-weight:600;'>{strength_label}</span>"
+                f"{reliability_html}"
                 f"</div>"
             ),
             unsafe_allow_html=True,
