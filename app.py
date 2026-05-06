@@ -165,6 +165,11 @@ def render_dashboard() -> None:
     st.subheader("오늘의 요약")
     st.caption("자주 보는 핵심 정보만 먼저 모아봤습니다.")
     detail_open = str(st.query_params.get("fg_detail", "0")) == "1"
+    fear_greed_data = None
+    try:
+        fear_greed_data = load_fear_greed_data()
+    except Exception:
+        fear_greed_data = None
 
     left, right = st.columns([0.62, 0.38], gap="large")
 
@@ -175,7 +180,12 @@ def render_dashboard() -> None:
             st.info("아직 저장된 상승확률 결과가 없습니다. `3. 상승확률 Top`을 한 번 실행하면 여기서 바로 볼 수 있습니다.")
         else:
             valuation_map = load_dashboard_valuation_map(user_id)
-            render_dashboard_hero_pick(top_frame, user_id=user_id, valuation_map=valuation_map)
+            render_dashboard_hero_pick(
+                top_frame,
+                user_id=user_id,
+                valuation_map=valuation_map,
+                fear_greed_data=fear_greed_data,
+            )
             render_dashboard_signal_sections(top_frame, user_id=user_id)
 
         st.markdown("**등록된 관심종목**")
@@ -187,7 +197,7 @@ def render_dashboard() -> None:
 
     with right:
         st.markdown("**공포탐욕 지수**")
-        render_dashboard_fear_greed()
+        render_dashboard_fear_greed(data_override=fear_greed_data)
 
     if detail_open:
         st.divider()
@@ -337,6 +347,7 @@ def render_dashboard_hero_pick(
     *,
     user_id: str,
     valuation_map: dict[str, dict[str, Any]] | None = None,
+    fear_greed_data: Any | None = None,
 ) -> None:
     rows = frame.reset_index(drop=True).to_dict(orient="records")
     recommendation_rows = [row for row in rows if classify_dashboard_signal(row)[0] == "오늘의 추천"]
@@ -381,6 +392,14 @@ def render_dashboard_hero_pick(
                 "</div>"
             )
 
+    hero_summary = build_dashboard_hero_summary(
+        probability=float(probability_raw) if pd.notna(probability_raw) else None,
+        strength_detail=strength_detail,
+        profile=profile,
+        valuation=valuation,
+        fear_greed_data=fear_greed_data,
+    )
+
     st.markdown(
         "<div style='border:1px solid #bbf7d0; background:linear-gradient(135deg, #f0fdf4 0%, #ecfeff 100%); "
         "border-radius:18px; padding:18px 18px 16px 18px; margin:0.1rem 0 1rem 0;'>"
@@ -398,7 +417,8 @@ def render_dashboard_hero_pick(
         f"{reliability_html}"
         "</div>"
         f"{valuation_html}"
-        f"<div style='font-size:0.88rem; color:#334155;'>{strength_detail}</div>"
+        f"<div style='font-size:0.9rem; color:#0f172a; font-weight:700; margin-bottom:0.32rem;'>{hero_summary}</div>"
+        f"<div style='font-size:0.84rem; color:#475569;'>{strength_detail}</div>"
         "</div>",
         unsafe_allow_html=True,
     )
@@ -442,6 +462,68 @@ def render_dashboard_signal_sections(frame: pd.DataFrame, *, user_id: str) -> No
                 with column:
                     render_dashboard_top_card(row, section_name=section_name, user_id=user_id)
         st.markdown("<div style='height:0.35rem;'></div>", unsafe_allow_html=True)
+
+
+def build_dashboard_hero_summary(
+    *,
+    probability: float | None,
+    strength_detail: str,
+    profile: Any | None,
+    valuation: dict[str, Any] | None,
+    fear_greed_data: Any | None,
+) -> str:
+    parts: list[str] = []
+
+    if probability is not None:
+        if probability >= 0.65:
+            parts.append("확률 신호는 꽤 강한 편입니다.")
+        elif probability >= 0.58:
+            parts.append("상승 쪽으로 기울었지만 과한 확신 구간은 아닙니다.")
+        elif probability <= 0.45:
+            parts.append("방향 신호가 약해 서두르기보다 확인이 우선입니다.")
+        else:
+            parts.append("애매한 구간이라 보조 지표 확인이 중요합니다.")
+    else:
+        parts.append(strength_detail)
+
+    if profile is not None:
+        if profile.reliability_grade == "A":
+            parts.append("이 종목은 누적 기준 신뢰도가 높은 편입니다.")
+        elif profile.reliability_grade == "B":
+            parts.append("누적 기준에선 보통 수준의 일관성을 보였습니다.")
+        elif profile.reliability_grade == "C":
+            parts.append("누적 기준 신뢰도는 낮아 보수적으로 보는 편이 좋습니다.")
+
+    if valuation is not None:
+        upside = pd.to_numeric(valuation.get("upside"), errors="coerce")
+        if pd.notna(upside):
+            if upside >= 0.2:
+                parts.append("목표가 기준 상승여력도 비교적 넉넉합니다.")
+            elif upside >= 0.08:
+                parts.append("목표가 기준으로는 아직 약간의 여유가 남아 있습니다.")
+            elif upside >= 0:
+                parts.append("목표가와 거리가 크지 않아 추격은 신중한 쪽이 좋습니다.")
+            else:
+                parts.append("현재가가 목표가를 웃돌아 밸류에이션상 부담이 있습니다.")
+
+    if fear_greed_data is not None:
+        try:
+            current = fear_greed_data.summary.iloc[0]
+            status = str(current.get("status") or "")
+            if "극단적 탐욕" in status:
+                parts.append("시장 심리가 과열권이라 분할 접근이 잘 맞습니다.")
+            elif "탐욕" in status:
+                parts.append("시장 열기가 있어 눌림 확인 후 접근이 더 편합니다.")
+            elif "극단적 공포" in status:
+                parts.append("시장 심리는 위축돼 있지만 반대로 변동성은 크게 나올 수 있습니다.")
+            elif "공포" in status:
+                parts.append("시장 심리가 위축된 구간이라 보수적인 진입이 유리합니다.")
+            elif "중립" in status:
+                parts.append("시장 심리는 중립권이라 종목 자체 신호 비중이 더 큽니다.")
+        except Exception:
+            pass
+
+    return " ".join(parts[:3])
 
 
 def render_dashboard_watchlist_cards(frame: pd.DataFrame) -> None:
@@ -563,12 +645,15 @@ def dashboard_signal_style(signal: str) -> tuple[str, str, str, str]:
     return ("중립", "#475569", "#e2e8f0", "#334155")
 
 
-def render_dashboard_fear_greed() -> None:
-    try:
-        data = load_fear_greed_data()
-    except Exception as exc:
-        st.warning(f"공포탐욕 지수를 불러오지 못했습니다: {exc}")
-        return
+def render_dashboard_fear_greed(*, data_override: Any | None = None) -> None:
+    if data_override is None:
+        try:
+            data = load_fear_greed_data()
+        except Exception as exc:
+            st.warning(f"\uacf5\ud3ec\ud0d0\uc695 \uc9c0\uc218\ub97c \ubd88\ub7ec\uc624\uc9c0 \ubabb\ud588\uc2b5\ub2c8\ub2e4. {exc}")
+            return
+    else:
+        data = data_override
 
     current = data.summary.iloc[0]
     score = float(current["score"])
@@ -578,18 +663,23 @@ def render_dashboard_fear_greed() -> None:
     compact_summary = data.summary.copy()
     compact_summary = compact_summary.rename(
         columns={
-            "period": "기간",
-            "score": "점수",
-            "status": "상태",
-            "change": "변화",
+            "period": "\uae30\uac04",
+            "score": "\uc810\uc218",
+            "status": "\uc0c1\ud0dc",
+            "change": "\ubcc0\ud654",
         }
     )
-    keep_columns = [column for column in ["기간", "점수", "상태", "변화"] if column in compact_summary.columns]
+    keep_columns = [
+        column
+        for column in ["\uae30\uac04", "\uc810\uc218", "\uc0c1\ud0dc", "\ubcc0\ud654"]
+        if column in compact_summary.columns
+    ]
     st.dataframe(compact_summary.loc[:, keep_columns], use_container_width=True, hide_index=True)
 
     if data.source_age_days > 7:
-        st.caption(f"원본 데이터가 {data.source_age_days}일 전 기준이라 최신 반영이 늦을 수 있습니다.")
-
+        st.caption(
+            f"\uc6d0\ubcf8 \ub370\uc774\ud130\uac00 {data.source_age_days}\uc77c \uc804 \uae30\uc900\uc774\ub77c \ucd5c\uc2e0 \ubc18\uc601\uc774 \ub2a6\uc744 \uc218 \uc788\uc2b5\ub2c8\ub2e4."
+        )
 
 def fear_greed_palette(score: float) -> tuple[str, str, str]:
     if score <= 24:
