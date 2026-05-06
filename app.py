@@ -169,12 +169,12 @@ def render_dashboard() -> None:
     left, right = st.columns([0.62, 0.38], gap="large")
 
     with left:
-        st.markdown("**내일 상승확률 높은 종목**")
+        st.markdown("**오늘의 판단 보드**")
         top_frame = load_dashboard_top_probability(user_id)
         if top_frame.empty:
             st.info("아직 저장된 상승확률 결과가 없습니다. `3. 상승확률 Top`을 한 번 실행하면 여기서 바로 볼 수 있습니다.")
         else:
-            render_dashboard_top_cards(top_frame)
+            render_dashboard_signal_sections(top_frame)
 
         st.markdown("**등록된 관심종목**")
         watchlist_frame = load_dashboard_watchlist(user_id)
@@ -229,7 +229,7 @@ def load_dashboard_top_probability(user_id: str) -> pd.DataFrame:
     if not display_columns:
         return normalized.head(5)
 
-    return normalized.loc[:, display_columns].head(5).copy()
+    return normalized.loc[:, display_columns].head(12).copy()
 
 
 def load_dashboard_watchlist(user_id: str) -> pd.DataFrame:
@@ -259,7 +259,54 @@ def render_dashboard_top_cards(frame: pd.DataFrame) -> None:
                 render_dashboard_top_card(row)
 
 
-def render_dashboard_top_card(row: dict[str, Any]) -> None:
+def classify_dashboard_signal(row: dict[str, Any]) -> tuple[str, str, str]:
+    try:
+        probability = float(row.get("상승확률"))
+    except (TypeError, ValueError):
+        probability = float("nan")
+    signal = str(row.get("판단") or "").strip().upper()
+    if pd.isna(probability):
+        return ("관망", "정보 부족", "#e2e8f0")
+    if signal == "UP" and probability >= 0.58:
+        return ("오늘의 추천", "상승 우세", "#dcfce7")
+    if signal == "DOWN" or probability <= 0.45:
+        return ("주의", "하락 경계", "#fee2e2")
+    return ("관망", "추가 확인", "#fef3c7")
+
+
+def render_dashboard_signal_sections(frame: pd.DataFrame) -> None:
+    section_order = [
+        ("오늘의 추천", "지금 가장 먼저 볼 만한 후보", "#166534"),
+        ("관망", "애매해서 한 번 더 확인할 후보", "#92400e"),
+        ("주의", "신호가 약하거나 하락 쪽으로 기운 후보", "#991b1b"),
+    ]
+    rows = frame.reset_index(drop=True).to_dict(orient="records")
+    grouped: dict[str, list[dict[str, Any]]] = {name: [] for name, _, _ in section_order}
+    for row in rows:
+        section_name, _, _ = classify_dashboard_signal(row)
+        grouped.setdefault(section_name, []).append(row)
+
+    for section_name, subtitle, accent in section_order:
+        section_rows = grouped.get(section_name, [])
+        st.markdown(
+            f"<div style='margin:0.15rem 0 0.65rem 0;'>"
+            f"<div style='font-size:1rem; font-weight:800; color:{accent};'>{section_name}</div>"
+            f"<div style='font-size:0.83rem; color:#64748b;'>{subtitle}</div>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+        if not section_rows:
+            st.caption("해당하는 종목이 아직 없습니다.")
+            continue
+        for start in range(0, min(len(section_rows), 4), 2):
+            columns = st.columns(2, gap="medium")
+            for column, row in zip(columns, section_rows[start : start + 2]):
+                with column:
+                    render_dashboard_top_card(row, section_name=section_name)
+        st.markdown("<div style='height:0.35rem;'></div>", unsafe_allow_html=True)
+
+
+def render_dashboard_top_card(row: dict[str, Any], *, section_name: str | None = None) -> None:
     name = str(row.get("종목명") or row.get("종목코드") or "-")
     ticker = str(row.get("종목코드") or "-")
     probability_raw = pd.to_numeric(row.get("상승확률"), errors="coerce")
@@ -269,8 +316,20 @@ def render_dashboard_top_card(row: dict[str, Any]) -> None:
     close_label = f"{close_raw:,.0f}" if pd.notna(close_raw) else "-"
     signal_label, accent_color, badge_bg, badge_fg = dashboard_signal_style(signal)
     strength_label, _ = describe_prediction_strength(float(probability_raw) if pd.notna(probability_raw) else 0.5)
+    section_label, section_hint, section_bg = classify_dashboard_signal(row)
+    card_border = (
+        "#86efac" if section_name == "오늘의 추천" else "#fcd34d" if section_name == "관망" else "#fca5a5"
+    )
 
     with st.container(border=True):
+        st.markdown(
+            f"<div style='display:flex; justify-content:space-between; gap:8px; align-items:center; margin-bottom:0.35rem;'>"
+            f"<span style='display:inline-block; padding:0.18rem 0.52rem; border-radius:999px; background:{section_bg}; "
+            f"color:#111827; font-size:0.76rem; font-weight:700; border:1px solid {card_border};'>{section_label}</span>"
+            f"<span style='font-size:0.76rem; color:#64748b;'>{section_hint}</span>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
         st.caption(ticker)
         st.markdown(f"**{name}**")
         st.markdown(
