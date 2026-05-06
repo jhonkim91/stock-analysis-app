@@ -181,7 +181,7 @@ def render_dashboard() -> None:
         if watchlist_frame.empty:
             st.info("등록된 관심종목이 없습니다. `2. 관심종목` 탭에서 검색해서 추가해보세요.")
         else:
-            st.dataframe(watchlist_frame, use_container_width=True, hide_index=True)
+            render_dashboard_watchlist_cards(watchlist_frame)
 
     with right:
         st.markdown("**공포탐욕 지수**")
@@ -290,7 +290,11 @@ def render_dashboard_signal_sections(frame: pd.DataFrame) -> None:
         section_rows = grouped.get(section_name, [])
         st.markdown(
             f"<div style='margin:0.15rem 0 0.65rem 0;'>"
+            f"<div style='display:flex; align-items:center; gap:8px;'>"
             f"<div style='font-size:1rem; font-weight:800; color:{accent};'>{section_name}</div>"
+            f"<span style='display:inline-block; padding:0.12rem 0.45rem; border-radius:999px; "
+            f"background:#f8fafc; color:{accent}; border:1px solid #e2e8f0; font-size:0.74rem; font-weight:700;'>{len(section_rows)}개</span>"
+            f"</div>"
             f"<div style='font-size:0.83rem; color:#64748b;'>{subtitle}</div>"
             f"</div>",
             unsafe_allow_html=True,
@@ -304,6 +308,49 @@ def render_dashboard_signal_sections(frame: pd.DataFrame) -> None:
                 with column:
                     render_dashboard_top_card(row, section_name=section_name)
         st.markdown("<div style='height:0.35rem;'></div>", unsafe_allow_html=True)
+
+
+def render_dashboard_watchlist_cards(frame: pd.DataFrame) -> None:
+    rows = frame.reset_index(drop=True).to_dict(orient="records")
+    total = len(rows)
+    us_count = sum(1 for row in rows if str(row.get("거래소") or "-") in {"-", ""})
+    kr_count = total - us_count
+
+    summary_cols = st.columns(3)
+    summary_cols[0].metric("전체", f"{total}")
+    summary_cols[1].metric("한국", f"{kr_count}")
+    summary_cols[2].metric("해외/기타", f"{us_count}")
+
+    for start in range(0, min(total, 8), 2):
+        columns = st.columns(2, gap="medium")
+        for column, row in zip(columns, rows[start : start + 2]):
+            with column:
+                render_dashboard_watchlist_card(row)
+
+    if total > 8:
+        st.caption(f"외 {total - 8}개 종목은 `2. 관심종목` 탭에서 계속 볼 수 있습니다.")
+
+
+def render_dashboard_watchlist_card(row: dict[str, Any]) -> None:
+    name = str(row.get("종목명") or row.get("종목코드") or "-")
+    ticker = str(row.get("종목코드") or "-")
+    exchange = str(row.get("거래소") or "-")
+    is_domestic = exchange not in {"-", ""}
+    badge_bg = "#dbeafe" if is_domestic else "#ede9fe"
+    badge_fg = "#1d4ed8" if is_domestic else "#6d28d9"
+    badge_label = exchange if is_domestic else "US/Global"
+
+    with st.container(border=True):
+        st.markdown(
+            f"<div style='display:flex; justify-content:space-between; gap:8px; align-items:center; margin-bottom:0.35rem;'>"
+            f"<span style='display:inline-block; padding:0.18rem 0.52rem; border-radius:999px; background:{badge_bg}; "
+            f"color:{badge_fg}; font-size:0.76rem; font-weight:700;'>{badge_label}</span>"
+            f"<span style='font-size:0.76rem; color:#64748b;'>관심종목</span>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+        st.caption(ticker)
+        st.markdown(f"**{name}**")
 
 
 def render_dashboard_top_card(row: dict[str, Any], *, section_name: str | None = None) -> None:
